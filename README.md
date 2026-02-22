@@ -54,21 +54,21 @@ The model recognizes **isolated sign glosses** (individual sign labels such as "
 flowchart TD
     A[Leap Motion / MediaPipe] --> B["Raw Skeletal Data (T, 42, 7)"]
 
-    subgraph Frontend ["FRONTEND (replaces Mel Spectrogram)"]
-        B --> C["Temporal Patch Embedding\n(T,42,7) to (T/P, d_model)"]
-        C --> D["ConvSPE\nDepthwise + Pointwise Conv"]
+    subgraph Frontend ["FRONTEND - replaces Mel Spectrogram"]
+        B --> C["Temporal Patch Embedding<br>(T,42,7) to (T/P, d_model)"]
+        C --> D["ConvSPE<br>Depthwise + Pointwise Conv"]
         D --> E["BatchNorm + SpatialDropout1D"]
     end
 
-    subgraph Encoder ["ENCODER (Spatio-Temporal Blocks x N)"]
-        E --> F["S-MHSA\nSpatial Self-Attention\n(handshape at time t)"]
-        F --> G["T-MHSA + RPE\nTemporal Self-Attention\n(motion over time)"]
-        G --> H["Feed-Forward (Pre-Norm)\nGELU activation"]
+    subgraph Encoder ["ENCODER - Spatio-Temporal Blocks x N"]
+        E --> F["S-MHSA<br>Spatial Self-Attention<br>handshape at time t"]
+        F --> G["T-MHSA + RPE<br>Temporal Self-Attention<br>motion over time"]
+        G --> H["Feed-Forward Pre-Norm<br>GELU activation"]
     end
 
-    subgraph Decoder ["DECODER (Two-Pass)"]
-        H --> I["Pass 1: CTC Head\nLinear + LogSoftmax + Greedy Decode"]
-        H --> J["Pass 2: Attention Decoder\nTransformer Decoder + Causal Mask"]
+    subgraph Decoder ["DECODER - Two-Pass"]
+        H --> I["Pass 1: CTC Head<br>Linear + LogSoftmax + Greedy Decode"]
+        H --> J["Pass 2: Attention Decoder<br>Transformer Decoder + Causal Mask"]
     end
 
     I --> K["Sign Glosses Output"]
