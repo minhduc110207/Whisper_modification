@@ -1,0 +1,96 @@
+# ============================================================
+# WhisperSign - Modified Whisper for Sign Language Recognition
+# ============================================================
+
+model:
+  # Whisper base model to load pretrained weights from
+  whisper_model: "base"  # tiny, base, small, medium, large
+
+  # Frontend
+  frontend:
+    num_joints: 42            # 21 left + 21 right hand joints
+    num_features: 7           # x, y, z, vx, vy, vz, confidence
+    patch_size: 4             # Temporal grouping: group P consecutive frames
+    d_model: 512              # Must match Whisper hidden dim (base=512)
+    dropout: 0.1
+    spatial_dropout: 0.15
+
+  # Encoder
+  encoder:
+    num_heads: 8
+    num_layers: 6             # Whisper base has 6 encoder layers
+    d_model: 512
+    d_ff: 2048
+    dropout: 0.1
+
+  # Decoder / CTC
+  decoder:
+    vocab_size: 1296          # Sign glosses + special tokens
+    blank_id: 0               # CTC blank token id
+    use_attention_rescoring: true
+
+data:
+  sample_rate: 60             # Target sampling rate in Hz
+  window_duration: 3.0        # Sliding window duration in seconds
+  window_overlap: 0.5         # 50% overlap
+  max_seq_length: 1500        # Max frames (= sample_rate * max_duration)
+  num_left_joints: 21
+  num_right_joints: 21
+
+  # Normalization
+  normalization:
+    spatial: true             # Hand-centric normalization
+    scale: true               # Scale invariance
+    feature_scaling: "standard"  # "standard" or "minmax"
+
+  # Augmentation
+  augmentation:
+    gesture_masking:
+      enabled: true
+      joint_mask_prob: 0.15   # Probability of masking each joint
+      temporal_mask_prob: 0.1 # Probability of masking a time segment
+      max_temporal_mask: 10   # Max frames to mask
+    noise:
+      enabled: true
+      std: 0.005              # Gaussian noise std
+    temporal_jitter:
+      enabled: true
+      max_shift: 2            # Max frames to shift
+
+training:
+  # Stage 1: Warm-up Frontend
+  stage1:
+    epochs: 30
+    lr: 1.0e-3
+    weight_decay: 1.0e-4
+    batch_size: 32
+    freeze_encoder: true
+    freeze_decoder: true
+
+  # Stage 2: Joint Training
+  stage2:
+    epochs: 100
+    lr: 5.0e-5
+    weight_decay: 1.0e-4
+    batch_size: 16
+    alpha: 0.3                # CTC loss weight
+    freeze_decoder: false
+
+  # Stage 3: Real-time Optimization
+  stage3:
+    epochs: 30
+    lr: 1.0e-5
+    weight_decay: 1.0e-5
+    batch_size: 16
+    alpha: 0.3
+    use_sliding_window: true
+
+  # General
+  optimizer: "adamw"
+  scheduler: "cosine"
+  warmup_steps: 500
+  grad_clip: 1.0
+  seed: 42
+  num_workers: 4
+  save_dir: "checkpoints"
+  log_dir: "logs"

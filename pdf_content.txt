@@ -1,0 +1,528 @@
+=== PAGE 1 ===
+Phương pháp biến đổi mô hình
+Whisper OpenAI 
+I. Mục tiêu
+Biến đổi, chỉnh sửa mô hình Whisper của OpenAI sao cho từ nhận dữ liệu
+dạng chuỗi thời gian audio thành chuỗi thời gian với tọa độ không gian 3D
+của thiết bị Leap Motion
+II. Về các thiết bị và mô hình sẽ được sử
+dụng
+1. Whisper
+Whisper là một hệ thống nhận dạng giọng nói tự động được OpenAI phát
+triển và cho ra mắt vào năm 2022, khác với các mô hình ASR thông thường,
+Whisper được thiết kế và đã được train từ 680000 giờ dữ liệu âm thanh có
+nhãn trên Internet, đảm bảo mô hình có thể hoạt động khi được sử dụng
+trong những hoàn cảnh đầu vào âm thanh không đạt chất lượng cao.
+Mô hình Whisper đã đạt đến ngưỡng hiệu suất lọc nhiễu tương đương với
+con người, tuy nhiên, hiện tượng Hallucination đôi khi vẫn xảy ra .
+https://arxiv.org/abs/2212.04356 link để đọc chi tiết hơn về mô hình trên.
+1. Kiến trúc của mô hình Whisper
+Phương pháp biến đổi mô hình Whisper OpenAI
+1
+
+
+=== PAGE 2 ===
+👁️
+Whisper sử dụng kiến trúc Transformer Encoder - Decoder, hiệu
+quả và đã được tối ưu hóa trong xử lí dữ liệu dạng chuỗi, loại dữ
+liệu sẽ được sử dụng trong dự án.
+Quy trình xử lí tín hiệu và triết xuất đặc trưng:
+1. Phân đoạn dữ liệu và chuyển đổi tần số: Tín hiệu, dữ liệu âm thanh
+được chuẩn hóa về tần số lấy mẫu (sample rate) 16 KHz và chia
+thành các đoạn nhỏ 30s.
+2. Biểu diễn miền tần số: Tín hiệu âm thanh được chuyển đổi từ miền
+thời gian về miền tần số qua phép biến đổi Log-Mel Spectrogram
+(một dạng biểu đồ nhiệt hiển thị cường độ âm thanh theo tần số
+và thời gian) với 80 channels, giúp mô hình nén âm thanh thô
+thành một ma trận đặc trưng, bao gồm nhiều thông tin ngữ nghĩa ,
+giúp mô hình có thể hiểu được dữ liệu đầu vào.
+3. Đi qua mạng tích chập: Trước khi được đưa vào mô hình
+Transformer, hai lớp mạng neuron tích chập (CNN) cùng với hàm
+kích hoạt GELU được sử dụng để trích xuất đặc trung cục bộ và
+giảm độ phân giải theo chiều thời gian.
+Cơ chế Transformer: 
+1. Encoder: Học những biểu diễn ẩn từ Spectrogram sử dụng cơ chế
+Self-Attention để hiểu ngữ cảnh trong các đoạn dữ liệu âm thành
+30s
+2. Decoder: Sử dụng cơ chế tự hồi quy để dữ đoán chuỗi token văn
+bản, đồng thời thực hiện nhiều tác vụ thông qua việc chèn những
+tokens đặc biệt vào chuỗi đầu vào
+Phương pháp biến đổi mô hình Whisper OpenAI
+2
+
+
+=== PAGE 3 ===
+2. Leap Motion
+Leap Motion là một cảm biến quang học nhỏ gọn, hoạt động dựa theo
+nguyên lý Stereoscopic Vision kết hợp với ánh sáng hồng ngoại:
+Phương pháp biến đổi mô hình Whisper OpenAI
+3
+
+
+=== PAGE 4 ===
+👁️
+Phần cứng: Leap motion bao gồm 2 camera hồng ngoại và 3 đèn
+LED hồng ngoại, hoạt động ở dải bước sóng 850nm.
+Trường nhìn: Leap Motion có góc nhìn rộng, khoảng 150 độ, tạo ra
+một trường nhìn là một nửa hình cầu có bán kính từ 60 - 80 cm
+bên trên thiết bị.
+Về tốc độ lấy mẫu: Có khả năng đạt đến lên tới 200 FPS, thông
+thường vào khoảng 60 FPS, phụ thuộc vào tốc độ xử lí GPU và
+điều kiện ánh sáng môi trường.
+Cơ chế nội suy khung hình giúp Leap motion có thể tổng hợp các
+khung hình mới tại các điểm cụ thể bằng cách sử dụng dữ liệu từ
+các khung hình gần nhất, nếu thời gian yêu cầu nằm trong 2
+khung hình cũ, hệ thống sẽ nội suy, nếu thời gian mới hơn khung
+hình cuối cùng, mô hình sẽ ngoại suy
+sai số trung bình của thiết bị vào khoảng 9.6 mm, độ chính xác
+giảm mạnh khi đưa vật ra xa hoặc bị che lấp, sử dụng gesture
+masking có thể hỗ trợ giảm sai số 
+Dữ liệu cần trích xuất:
+Phương pháp biến đổi mô hình Whisper OpenAI
+4
+
+
+=== PAGE 5 ===
+👁️
+Đặc tả Tensor đầu vào đa chiều (Dual - Input)
+Phương pháp biến đổi mô hình Whisper OpenAI
+5
+
+
+=== PAGE 6 ===
+👁️
+1. Để thay thế cho biểu đồ Mel của Whisper, dữ liệu động
+học được cấu trúc dưới dạng tensor 3D bao quát trạng
+thái cả 2 bàn tay với Input Shape: 
+ - gồm 
+42 thực thể khớp (21 khớp Tay Trái và 21 khớp Tay Phải)
+để bao quát toàn bộ hệ khung xương của cả hai bàn tay
+trong các ký hiệu tương tác phức tạp:
+(T × 42 × F)
+Phương pháp biến đổi mô hình Whisper OpenAI
+6
+
+
+=== PAGE 7 ===
+👁️
+Trục thời gian (T): Chuỗi khung hình được
+chuẩn hóa về tần số cố định 60Hz thông qua
+thuật toán Spline Interpolation. Việc này đảm
+bảo độ dài chuỗi cố định trên một đơn vị thời
+gian, giúp mô hình hiểu đúng tốc độ cử chỉ.
+Trục khớp xương (J = 42): Bao gồm 21 khớp
+Tay Trái (0-20) và 21 khớp Tay Phải (21-41).
+Ngôn ngữ ký hiệu (SL) phần lớn là sự tương tác
+của cả hai tay, việc sử dụng 42 khớp (2 tay)
+thay vì 21 khớp (1 tay) giúp mô hình nắm bắt
+đầy đủ thông tin không gian của cả hai tay,
+tránh tình trạng "mù" thông tin.
+👁️
+Chỉ số 0, 21 (Palm): điểm neo (anchor
+point) cho hệ tọa độ của mỗi tay
+(lòng bàn tay)
+Chỉ số 1 - 20, 22-41: Các đốt xương
+từ ngón cái đến ngón út theo trình tự
+phân cấp để bảo toàn tính liên kết
+không gian.
+Trục đặc trưng (Feature, F): Các đại lượng
+được lưu trữ dưới dạng LEAP_VECTOR bao
+gồm tọa độ hình học (x, y, z), vận tốc tức thời
+(mm/s), hướng lòng bàn tay (Pitch, Roll, Yaw)
+và chỉ số Confidence
+Phương pháp biến đổi mô hình Whisper OpenAI
+7
+
+
+=== PAGE 8 ===
+Chuẩn hóa dữ liệu: 
+👁️
+Mô hình Deep Learning yêu cầu dữ liệu đầu vào phải có
+sự phân phối ổn định. Ta cần 3 loại invariance (bất biến)
+chính trong phân tích cử chỉ:
+1. Bất biến vị trí (Spatial Invariance) - Dual Hand-centric
+Normalization: cho phép người dùng có thể đặt tay ở
+bất kì đâu trong vùng quan sát của Leap motion. Thay vì
+sử dụng tọa độ tuyệt đối, mô hình áp dụng công thức 
+ độc lập cho từng tay:
+Tay Trái: Tọa độ các khớp (0-20) được tính tương
+đối theo Lòng bàn tay trái (chỉ số 0)
+Tay Phải: Tọa độ các khớp (21-41) được tính tương
+đối theo Lòng bàn tay phải (chỉ số 21)
+Trong đó 
+ là tọa độ gốc của khớp thứ  và 
+ là tọa
+độ lòng bàn tay tương ứng. Sau khi chuẩn hóa, các tọa
+độ tương đối của cả hai tay được gộp vào mảng chung.
+Phương pháp này triệt tiêu sai số khi người dùng di
+chuyển một tay ra xa tay kia trong không gian quan sát,
+đảm bảo một cử chỉ sẽ cho ra cùng một bộ vector dù
+người dùng đặt tay ở xa hay gần cảm biến.
+2. Bất biến tỉ lệ (Scale Invariance): Kích thước bàn tay của
+mỗi người là khác nhau, vậy nên tay cần chuẩn hóa
+khoảng cách từ các khớp xương đến lòng bàn tay về [0,
+1], bằng cách lấy khoảng cách này chia cho chiều dài
+trung bình của xương bàn tay.
+3. Chuẩn hóa phân phối (Feature Scaling): Để tránh
+exploding gradient, sử dụng StandardScaler hoặc
+MinMaxScaler để đưa toàn bộ giá trị đặc trưng về phân
+phối trung bình bằng 0 và phương sai bằng 1.
+Tần số lấy mẫu và nội suy:
+​ =
+P^i
+P
+​ −
+i
+P
+​
+palm
+P
+​i
+i
+P
+​
+palm
+Phương pháp biến đổi mô hình Whisper OpenAI
+8
+
+
+=== PAGE 9 ===
+👁️
+Leap Motion có sampling rate (tốc độ lấy mẫu) không ổn
+định, thường giao động trong khoảng 60 Hz - 120 Hz,
+tùy thuộc vào điều kiện ánh sáng và GPU, tuy nhiên
+những mô hình Transformer như Whisper lại yêu cầu độ
+dài chuỗi cố định trên mỗi đơn vị thời gian, nếu đưa dữ
+liệu có sampling rate biến thiên vào mô hình, mô hình sẽ
+hiểu sai về tốc độ của cử chỉ.
+Giải pháp: Thực hiện tái lấy mẫu về một tần số cố định,
+50 Hz hoặc 60Hz, sử dụng thuật toán Linear
+Interpolation hoặc Spline Interpolation để bù đắp các
+khung hình bị thiếu hoặc loại bỏ các khung hình dư thừa,
+đảm bảo các bước thời gian đồng nhất.
+Đóng gói dữ liệu cho Transformer:
+👁️Sau khi đã đi qua pipeline trên, dữ liệu được đóng gói thành
+một tensor 3D có cấu trúc tương đương với phổ đồ âm thanh
+nhưng mang nội dung động học:
+Độ trễ và cửa sổ xử lí:
+Phương pháp biến đổi mô hình Whisper OpenAI
+9
+
+
+=== PAGE 10 ===
+👁️
+Độ trễ trong hệ thống này có thể đến từ 2 nguồn:
+1. Leap motion mặc dù có độ trễ thấp, khoảng 10ms, những độ trễ là
+vẫn tồn tại.
+2. Độ trễ khi suy luận: đây là phần quan trọng nhất cần để tâm tới,
+mô hình Whisper được thiết kế để xử lí những đoạn âm thanh dài
+30s, nếu dữ liệu ngắn hơn, sẽ sinh ra độ trễ và lãng phí tài
+nguyên.
+⇒ cách khắc phục: - Tối ưu hóa: Sử dụng kỹ thuật sliding window ,
+thay vì đợi 30s, ta chỉ thực hiện suy luận trên các đoạn 2-3s, đủ cho
+1-2 cử chỉ với mức độ overlap khoảng 50%.
+III. Quá trình cải tiến mô hình Whisper để
+phù hợp với mục đích của dự án
+1. Thay đổi frontend của mô hình Whisper
+để chuyển đổi cơ chế xử lý âm thanh nguyên bản của Whisper, một tầng
+frontend mới cần được tích hợp cơ chế nhúng thông tin không gian - thời
+gian từ tọa độ của Leap motion. Giai đoạn này sẽ tập trung vào việc biến đổi
+những dữ liệu thô thành các vecto nhúng có ý nghĩa, trước khi đưa dữ liệu
+đi vào các khối Encoder.
+Cơ chế Patch Embedding và gom nhóm thời gian:
+Phương pháp biến đổi mô hình Whisper OpenAI
+10
+
+
+=== PAGE 11 ===
+👁️
+Dữ liệu đầu vào từ leap motion có tốc độ lấy mẫu rất cao, dẫn đến
+việc chuỗi trở nên rất dài, nếu đưa trực tiếp vào Transformer, độ
+phức tạp giữa tham số và thời gian khi tính toán của cơ chế Self-
+attention sẽ tăng theo cấp số nhân O(N^2) ⇒ để tránh tính trạng
+trên, áp dụng 2 cơ chế là Temporal Grouping và Linear projection,
+2 kĩ thuật này sẽ gom nhóm các khung hình liên tiếp thành các
+mảnh (patches), giúp giảm chiều dài chuỗi và tối ưu hóa chi phí
+tính toán (độ phức tạp giữa tham số-thời gian). Linear Projection
+sẽ ánh xạ các tọa độ từ không gian động học 3D vào không gian
+ẩn của Transformer, tại đây các đặc trưng như vị trí đầu ngón tay,
+hướng lòng bàn tay, góc của các khớp xương sẽ được kết hợp tạo
+ra một biểu diễn nén hiệu quả.
+Tích hợp ConvSPE cho thông tin vị trí không gian-thời gian
+👁️
+Một trong những cải tiến quan trọng nhất trong lớp frontend thay
+thế chính là việc sử dụng ConvSPE (Convolutional Spatial-
+Positional Encoding). Thay vì sử dụng mã hóa vị trí cố định truyền
+thống, ConvSPE sử dụng các lớp tích chập chéo theo chiều sâu
+để học các mối liên hệ không gian cục bộ giữa các khớp xương
+lân cận. Cơ chế này cho phép mô hình nắm bắt được cấu trúc hình
+thái của bàn tay một cách linh hoạt, việc sử dụng tích chập còn
+giúp mô hình tự động nhận diện các mối liên hệ không gian cục
+bộ giữa các vector tọa độ lân cận của 42 khớp xương mà không
+cần phụ thuộc vào một hệ quy chiếu tuyệt đối cứng nhắc, điều
+nãy hữu ích khi bàn tay di chuyển hoặc xoay trong không gian
+theo dõi của Leap Motion.
+Normalization và Regularization
+Phương pháp biến đổi mô hình Whisper OpenAI
+11
+
+
+=== PAGE 12 ===
+👁️Để đảm bảo cho quá trình train được diễn ra ổn định, frontend mới sẽ
+được tích hợp Batch Normalization, lớp này sẽ có chức năng giúp
+chuẩn hóa các bản đồ đặc trưng, ổn định giá trị kích hoạt và tăng tốc
+độ hội tụ, bên cạnh đó, sự kết hợp của Spatial Dropout sẽ ngẫu nhiên
+loại bỏ các kênh đặc trưng. Kỹ thuật này giúp tăng khả năng tổng quát
+hóa, tránh overfitting và nhiễu đo lường cảm biến hồng ngoại của thiết
+bị Leap Motion.
+IV. Tối ưu hóa Encoder và quản lý độ trễ
+thực tế
+Sau khi đi qua tầng Frontend mới, các vecto nhúng được đưa vào khối
+Transformer Encoder, tại giai đoạn này, cấu trúc Whisper cần được tinh
+chỉnh để duy trì sự ổn định của luồng dữ liệu động học và đảm bảo khả
+năng phản hồi thời gian thực.
+Khối encoder của Whisper được tái cấu trúc thành các Spatio-temporal
+Blocks để tách biệt việc học hình thái và học quỹ đạo. Mỗi khối Transformer
+được tái cấu trúc để xử lý tuần tự không gian rồi mới đến thời gian:
+👁️
+1. Spatial Multi-Head Self Attention (S-MHSA): Được thực hiện
+trước để tính toán mối quan hệ giữa 42 khớp xương trong cùng
+một khung hình. Cơ chế này giúp mô hình học được Handshape
+(hình dạng cấu hình bàn tay) - một yếu tố quan trọng trong ngôn
+ngữ ký hiệu.
+2. Temporal Multi-head Self-Attention (T-MHSA): Được thực hiện
+sau để xử lý quỹ đạo theo thời gian. Sử dụng mã hóa vị trí tương
+đối (RPE) để tập trung vào Trajectory (quỹ đạo chuyển động) của
+các khớp xương qua các khung hình liên tiếp.
+Layer Normalization và cấu trúc Pre-Norm
+Phương pháp biến đổi mô hình Whisper OpenAI
+12
+
+
+=== PAGE 13 ===
+👁️
+Để duy trì sự ổn định khi luồng dữ liệu đi qua các tầng attention
+sâu, việc sử dụng cấu trúc Pre-Norm kết hợp với Layer
+Normalization là điều bắt buộc. Trong kiến trúc này, lớp LN được
+đặt trước các khối attention và Feed-foward thay vì sau chúng,
+điều này giúp ngăn chặn hiện tượng Exploding Gradient hoặc
+vanishing Gradient, những vẫn đến thường gặp khi xử lý chuỗi thời
+gian có biến động mạnh như quỹ đạo chuyển động của tay
+Tăng cường dữ liệu bằng Gesture Masking
+👁️Hệ thống sẽ ngẫu nhiên che các đoạn thời gian hoặc các nhóm khớp
+xương nhất định ví dụ như bắt hợp mô hình nhận dạng cử chỉ khi dữ
+liệu của một hoặc nhiều những ngón tay bị che khuất. Phương pháp
+này giúp mô hình hoạt động hiệu quả hơn trước những trường hợp xảy
+ra sự che khuất trong thực tế 
+Sliding window và quản lý độ trễ
+Phương pháp biến đổi mô hình Whisper OpenAI
+13
+
+
+=== PAGE 14 ===
+👁️
+Sử dụng Sliding Window trên những đoạn dữ liệu từ 2-3s và
+overlap xấp xỉ 50%. Việc sử dụng Sliding window giúp đảm bảo
+phản hồi thời gian thực và tính liên tục của cử chỉ, thay vì cần đợi
+hết 30s như mô hình Whisper truyền thống, mô hình sẽ đưa ra dự
+đoán liên tục dựa trên bối cảnh cục bộ, đối với cử chỉ dài hoặc
+ngôn ngữ ký hiệu liên tục, cơ chế attention vẫn có thể truy cập
+vào trạng thái ẩn của cửa sổ trước đó để duy trì tính nhất quán
+của ngữ nghĩa
+Tần số phản hồi hệ thống: <100ms giúp tương tác của người dùng
+trở nên thêm mượt mà, tổng của độ trễ phần cứng + Thời gian
+truyền dữ liệu + thời gian xử lí của AI + thời gian render của UI
+phải nằm dưới 0.1s, yêu cầu sự tối ưu cao
+Làm mượt dữ liệu: sử dụng cơ chế Moving Average, dữ liệu thô từ
+cảm biến leap motion sẽ luôn thay đổi, các tọa độ sẽ luôn bị nhảy
+nhẹ do nhiễu điện từ hoặc do sự rung tự nhiên từ tay người. Cơ
+chế moving average sẽ lấy trung bình cộng của n khung hình gần
+nhất, tránh mô hình hiểu lầm sự rung tạo ra cử chỉ khác, dẫn đến
+dự đoán sai
+V. Tầng giải mã CTC cho nhận dạng ngôn
+ngữ ký hiệu và Encoder
+Để nâng cấp Whisper lên khả năng nhận dạng ngôn ngữ ký hiệu liên tục
+(CSLR), chúng ta tích hợp một nhánh giải mã bổ sung dựa trên
+Connectionist Temporal Classification (CTC) loss trên đỉnh của Encoder.
+Phương pháp biến đổi mô hình Whisper OpenAI
+14
+
+
+=== PAGE 15 ===
+👁️
+Thiết lập tầng CTC Head trên đỉnh Encoder: Một lớp Linear
+projection được thêm vào để ánh xạ từ không gian ẩn của
+Encoder sang không gian Vocabulary.
+Vocabulary (Tập nhãn): Bắt buộc bao gồm:
+Các Sign Glosses: Đơn vị ngôn ngữ ký hiệu cơ bản (ví dụ:
+"HELLO", "THANK-YOU", "LOVE")
+Mã đặc biệt <blank> : Để xử lý các khoảng nghỉ, khoảng lặp lại
+và ranh giới giữa các từ ký hiệu
+Cơ chế Unified Two-Pass Decoding
+Phương pháp biến đổi mô hình Whisper OpenAI
+15
+
+
+=== PAGE 16 ===
+👁️Kiến trúc này biến Whisper thành một hệ thống nhận dạng hai bước
+(Two-Pass), kết hợp ưu điểm của CTC và Attention để đạt độ chính
+xác cao với độ trễ thấp:
+👁️Pass 1 (CTC Decoder):
+Một lớp Linear + Softmax mới được đặt trên đỉnh
+Encoder để dự đoán chuỗi các đơn vị ký hiệu (Sign
+Glosses).
+Giả định độc lập có điều kiện (Conditional
+Independence Assumption): CTC giả định rằng xác
+suất của mỗi token đầu ra tại mỗi bước thời gian chỉ phụ
+thuộc vào trạng thái ẩn của Encoder tại thời điểm đó,
+không phụ thuộc vào các token đã xuất trước đó. Điều
+này cho phép Input-synchronous emission - khả năng
+xuất các token ngay lập tức khi nhận được dữ liệu khung
+hình mới, giúp giảm độ trễ trong ứng dụng thời gian
+thực.
+CTC sử dụng dynamic programming (thuật toán lập
+trình động) để tính toán xác suất của tất cả các chuỗi
+căn chỉnh có thể, sau đó gộp chúng lại thành chuỗi ký
+hiệu cuối cùng bằng cách loại bỏ các token <blank>  và
+các ký tự lặp liên tiếp.
+Ưu điểm: Nhanh, song song hóa được hoàn toàn, phù
+hợp với streaming inference.
+Nhược điểm: Không có khả năng mô hình hóa phụ thuộc
+ngữ cảnh giữa các token đầu ra.
+Phương pháp biến đổi mô hình Whisper OpenAI
+16
+
+
+=== PAGE 17 ===
+👁️Pass 2 (Attention Decoder - Rescoring):
+Decoder nguyên bản của Whisper không thực hiện giải
+mã tự hồi quy (autoregressive decoding) từ đầu, mà chỉ
+thực hiện Rescoring (chấm điểm lại) các giả thuyết từ
+CTC.
+Thay vì sinh từng token một cách tuần tự (chậm và tốn
+tài nguyên), Decoder chỉ cần một lượt xử lý batched
+pass với diagonal causal attention mask. Cơ chế này
+đảm bảo mỗi vị trí trong chuỗi chỉ được phép nhìn thấy
+các vị trí trước đó (causal constraint), nhưng toàn bộ
+chuỗi được xử lý song song trong một forward pass duy
+nhất.
+Điều này giúp tiết kiệm đáng kể tài nguyên CPU/GPU so
+với autoregressive decoding truyền thống, đồng thời vẫn
+bảo tồn tri thức ngôn ngữ từ mô hình Whisper gốc để
+tinh chỉnh dự đoán.
+Kết quả cuối cùng: Sự kết hợp của CTC (nhanh,
+monotonic) và Attention (chính xác, ngữ cảnh) tạo ra
+một hệ thống vừa có độ trễ thấp vừa đạt độ chính xác
+cao.
+Hàm mất mát hỗn hợp (Hybrid Loss):
+Trong đó:
+: Đảm bảo tính monotonic (thứ tự thời gian) và khả năng
+căn chỉnh chuỗi thời gian với chuỗi nhãn. Loss này được tính
+bằng negative log-likelihood của chuỗi nhãn đúng dưới tất cả
+các căn chỉnh có thể.
+: Bảo tồn tri thức ngôn ngữ và khả năng mô hình hóa
+ngữ cảnh từ mô hình Whisper gốc. Loss này được tính bằng
+cross-entropy giữa dự đoán của Decoder và nhãn thực tế.
+L = α ⋅L
+​ +
+CTC
+(1 −α) ⋅L
+​
+Attention
+L
+​
+CTC
+L
+​
+Attention
+Phương pháp biến đổi mô hình Whisper OpenAI
+17
+
+
+=== PAGE 18 ===
+: Hệ số cân bằng (thường chọn trong khoảng 0.3 - 0.5), giá trị
+cao hơn sẽ ưu tiên tính monotonic của CTC, giá trị thấp hơn sẽ
+ưu tiên mô hình hóa ngữ cảnh của Attention.
+VI. Quy trình Train mô hình
+1. Giai đoạn 1: Warm-up Frontend:
+Đóng băng (Freeze) toàn bộ Encoder và Decoder của Whisper.
+Chỉ huấn luyện tầng Frontend mới (ConvSPE và Linear Projection) để nó
+học cách ánh xạ các tọa độ (
+ vào không gian ẩn (hidden
+space) mà Whisper có thể hiểu được.
+2. Giai đoạn 2: Joint Training (Hybrid Loss)
+Mở băng Encoder và huấn luyện với hàm mất mát hỗn hợp:
+Sử dụng hệ số  từ 0.3 đến 0.5 để cân bằng giữa việc căn chỉnh thời gian
+(CTC) và ngữ cảnh (Attention).
+3. Giai đoạn 3: Tối ưu hóa thời gian thực:
+Áp dụng Sliding Window (cửa sổ trượt) từ 2-3s với độ chồng lấp (overlap)
+50% trong quá trình inference để kiểm tra độ trễ.
+α
+T × 42 × F)
+L = α ⋅L
+​ +
+CTC
+(1 −α) ⋅L
+​
+Attention
+α
+Phương pháp biến đổi mô hình Whisper OpenAI
+18
+
+
+=== PAGE 19 ===
+Sử dụng Gesture Masking (che khuất ngẫu nhiên các khớp) để tăng độ bền
+bỉ cho mô hình.
+VII. Nguồn dữ liệu ngôn ngữ ký hiệu
+dùng MediaPipe hoặc AlphaPose để trích xuất tọa độ 3D từ video, sau đó
+chuẩn hóa về định dạng 
+để khớp với mô hình.
+RWTH-PHOENIX-Weather 2014 T: Bộ dữ liệu chuẩn cho ngôn ngữ ký hiệu
+liên tục (Continuous SL), phù hợp với CTC
+MS-ASL (Microsoft ASL): Một bộ dữ liệu cấp độ từ đơn (Word-level) cực
+lớn với hơn 25.000 mẫu. Nó giúp cung cấp một tập nhãn (Vocabulary)
+phong phú cho tầng giải mã CTC và Attention.
+CSL-Daily (Continuous Chinese Sign Language): Tập trung vào ngôn ngữ
+ký hiệu liên tục (CSLR) trong đời sống hàng ngày. Bộ dữ liệu này cung cấp
+cả video và các tọa độ khớp xương (keypoints) đã được trích xuất sẵn, rất lý
+tưởng để huấn luyện các khối Spatio-temporal Blocks trong Encoder.
+AUTSL (Large-Scale Multi-modal Turkish Sign Language): Đây là bộ dữ
+liệu đa phương thức (RGB+D) quy mô lớn. Dữ liệu độ sâu (Depth) từ bộ này
+hỗ trợ rất tốt cho việc học các đặc trưng không gian 3D $(x, y, z)$ tương tự
+như dữ liệu từ Leap Motion.
+LSA64 (Argentinian Sign Language): Bao gồm 64 loại ký hiệu tay khác
+nhau. Do các video có góc quay rất rõ nét, nó cực kỳ phù hợp để thử
+nghiệm thuật toán Chuẩn hóa bất biến vị trí (Spatial Invariance) và Bất biến
+tỉ lệ (Scale Invariance) mà bạn đã thiết lập.
+→ Một số lưu ý khi trích xuất và tiền xử lý
+Để khớp hoàn toàn với cấu trúc Input Shape 
+:
+→ Sử dụng MediaPipe Holistic để lấy chính xác 21 khớp tay trái (0-20) và 21
+khớp tay phải (21-41) theo đúng trình tự phân cấp xương.
+→ huẩn hóa Hand-centric: Áp dụng công thức 
+ cho từng tay
+sau khi trích xuất từ video để đảm bảo tính bất biến vị trí giống như khi nhận dữ
+liệu từ Leap Motion.
+→ Tăng cường dữ liệu (Augmentation): Áp dụng Gesture Masking (che ngẫu
+nhiên một số khớp hoặc đoạn thời gian) để mô hình học được cách xử lý khi xảy
+ra hiện tượng che khuất (occlusion) trong thực tế.
+(T × 42 × F)
+(T × 42 × F)
+​ =
+P
+​i^
+P
+​ −
+i
+P
+​
+palm
+Phương pháp biến đổi mô hình Whisper OpenAI
+19
+
+
+=== PAGE 20 ===
+Phương pháp biến đổi mô hình Whisper OpenAI
+20
+
+

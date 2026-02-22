@@ -1,0 +1,72 @@
+﻿========================================================================
+  WhisperSign - Deep Functional Inspection
+========================================================================
+
+--- F1: CTC Decoding Logic ---
+  [OK] CTC blank+dedup removal....................................... PASS ([3, 5, 7])
+  [OK] All blanks -> empty........................................... PASS ([])
+  [OK] Repeated single token -> [5].................................. PASS ([5])
+  [OK] 3,blank,3,blank,3 -> [3,3,3].................................. PASS ([3, 3, 3])
+
+--- F2: Attention Causal Mask ---
+  [OK] Causal: position 0 unaffected................................. PASS
+  [OK] Causal: position 1 unaffected................................. PASS
+  [OK] Causal: position 2 unaffected................................. PASS
+  [OK] Causal: position 3 changes.................................... PASS
+
+--- F3: Encoder Masking ---
+  [OK] Mask: output lengths match.................................... PASS
+  [OK] Mask: valid region outputs correlated......................... PASS (cosine=0.9752)
+
+--- F4: Relative Positional Encoding ---
+  [OK] RPE output shape.............................................. PASS
+  [OK] RPE diagonal consistent (dist=0).............................. PASS
+  [OK] RPE shift invariance.......................................... PASS
+  [OK] RPE shift invariance (2)...................................... PASS
+  [OK] RPE different distances differ................................ PASS
+
+--- F5: Deterministic Inference ---
+  [OK] Deterministic: CTC output identical........................... PASS
+  [OK] Deterministic: encoder output identical....................... PASS
+  [OK] Deterministic: decode results identical....................... PASS
+
+--- F6: Training Convergence (Memorization Test) ---
+  [OK] Memorization: loss decreases significantly.................... PASS (3.678 -> 0.006)
+  [OK] Memorization: final loss < 1.0................................ PASS (final=0.0061)
+  [OK] Memorization: decoded non-empty results....................... PASS (4/4 non-empty)
+
+--- F7: Two-Pass Decoder ---
+  [OK] Two-pass: CTC works without targets........................... PASS
+  [OK] Two-pass: Attention is None without targets................... PASS
+  [OK] Two-pass: CTC shape with targets.............................. PASS
+  [OK] Two-pass: Attention shape with targets........................ PASS
+  [OK] Two-pass: CTC invariant to targets............................ PASS
+
+--- F8: End-to-End Pipeline (numpy -> prediction) ---
+  [OK] E2E: normalization produces valid data........................ PASS
+  [OK] E2E: preprocessing shape correct.............................. PASS
+  [OK] E2E: model output is finite................................... PASS
+  [OK] E2E: output length correct.................................... PASS (200/4=50)
+  [OK] E2E: decode returns list...................................... PASS
+  [OK] E2E: sliding window returns list.............................. PASS
+
+--- F9: Attention Weight Distribution ---
+  [OK] Attn: weights sum to 1........................................ PASS
+  [OK] Attn: weights all >= 0........................................ PASS
+  [OK] Attn: weights all <= 1........................................ PASS
+  [OK] Attn: not degenerate (entropy > 0)............................ PASS (entropy=2.942/2.996)
+  [!!] Attn: different heads differ.................................. FAIL
+
+--- F10: Gradient Magnitude Analysis ---
+  [OK] Grad Frontend: not vanishing.................................. PASS (mean=3.62e-02)
+  [OK] Grad Frontend: not exploding.................................. PASS (max=1.93e-01)
+  [OK] Grad Encoder: not vanishing................................... PASS (mean=4.63e-02)
+  [OK] Grad Encoder: not exploding................................... PASS (max=1.88e-01)
+  [OK] Grad CTC Decoder: not vanishing............................... PASS (mean=2.89e-01)
+  [OK] Grad CTC Decoder: not exploding............................... PASS (max=4.74e-01)
+  [OK] Grad ratio frontend/encoder reasonable........................ PASS (ratio=1.3x)
+
+========================================================================
+  RESULTS: 43 passed, 1 failed, 44 total
+========================================================================
+  >>> SOME TESTS FAILED <<<

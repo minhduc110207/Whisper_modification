@@ -1,0 +1,61 @@
+﻿======================================================================
+  WhisperSign - Deep Technical Verification Suite
+======================================================================
+
+--- SECTION 1: Tensor Shape Propagation ---
+  [OK] PatchEmbed exact div (120/4=30)............................. PASS (torch.Size([2, 30, 256]))
+python : Traceback (most 
+recent call last):
+At line:1 char:1
++ python 
+scripts/deep_test.py 2>&1 
+| Out-File -Encoding utf8 
+D:\Whisper ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~
+    + CategoryInfo        
+      : NotSpecified: (T  
+  raceback (most recent   
+  call last)::String)     
+[], RemoteException
+    + FullyQualifiedError 
+   Id : NativeCommandErr  
+  or
+ 
+  File "D:\Whisper_modific
+ation\scripts\deep_test.py
+", line 473, in <module>
+    success = run_all()
+  File "D:\Whisper_modific
+ation\scripts\deep_test.py
+", line 66, in run_all
+    out_odd = pe(x_odd)
+  File "C:\Users\admin\App
+Data\Local\Programs\Python
+\Python313\Lib\site-packag
+es\torch\nn\modules\module
+.py", line 1775, in 
+_wrapped_call_impl
+    return 
+self._call_impl(*args, 
+**kwargs)
+           ~~~~~~~~~~~~~~~
+^^^^^^^^^^^^^^^^^
+  File "C:\Users\admin\App
+Data\Local\Programs\Python
+\Python313\Lib\site-packag
+es\torch\nn\modules\module
+.py", line 1786, in 
+_call_impl
+    return 
+forward_call(*args, 
+**kwargs)
+  File "D:\Whisper_modific
+ation\src\model\frontend.p
+y", line 62, in forward
+    x = F.pad(x, (0, 0, 
+0, 0, 0, pad_len))
+        ^^^^^
+AttributeError: 'int' 
+object has no attribute 
+'pad'
