@@ -9,6 +9,7 @@
     <img src="https://img.shields.io/badge/Python-3.8+-3776AB?logo=python&logoColor=white" alt="Python">
     <img src="https://img.shields.io/badge/License-MIT-green.svg" alt="MIT License">
     <img src="https://img.shields.io/badge/Tests-112%20passed-brightgreen" alt="Tests">
+    <img src="https://img.shields.io/badge/Sign%20Language-Vietnamese%20(VSL)-orange" alt="VSL">
   </p>
 </p>
 
@@ -20,74 +21,58 @@
 
 The model outputs **sign glosses** — semantic labels for individual signs — enabling real-time translation of hand gestures into text.
 
+### Sign Language Standard
+
+WhisperSign currently targets **Vietnamese Sign Language (VSL)** — _Ngon ngu ky hieu Viet Nam_. VSL is the primary sign language used by the deaf community in Vietnam, with its own grammar and phonology distinct from spoken Vietnamese.
+
+The model recognizes **isolated sign glosses** (individual sign labels such as "xin_chao", "cam_on", "ban") rather than continuous signed sentences.
+
+**Supported Vietnamese Sign Language Datasets:**
+
+| Dataset | Source | Format | Size |
+|---------|--------|--------|------|
+| VSL-Vietnamese Sign Languages | [Kaggle](https://www.kaggle.com/datasets/phamminhhoang/vsl-vietnamese-sign-languages) | Videos + label.csv | Varied |
+| VOYA_VSL | [HuggingFace](https://huggingface.co/datasets/VOYA/VOYA_VSL) | Pre-extracted MediaPipe keypoints (.npz) | ~161 samples |
+| Multi-VSL | [CVPR Paper](https://openaccess.thecvf.com/) | 1000 glosses, 84k+ videos, 30 signers | Large-scale |
+
+> **Note:** The architecture is language-agnostic. You can train on any sign language dataset by providing the appropriate `label_map.json`. The input format (skeletal hand keypoints) is universal across sign languages.
+
 ### Why Modify Whisper?
 
 | Challenge | Whisper's Strength | Our Adaptation |
 |-----------|-------------------|----------------|
 | Temporal sequence modeling | Proven on variable-length audio | Applied to variable-length gesture sequences |
 | Noisy real-world input | Robust to audio noise | Robust to skeletal tracking noise |
-| Multi-scale pattern detection | Phoneme → word → sentence | Finger config → hand shape → sign phrase |
+| Multi-scale pattern detection | Phoneme to word to sentence | Finger config to hand shape to sign phrase |
 | Real-time streaming | Efficient attention mechanism | Sliding window inference for live translation |
 
 ---
 
 ## Architecture
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    WhisperSign Pipeline                      │
-├─────────────────────────────────────────────────────────────┤
-│                                                             │
-│  Leap Motion / MediaPipe                                    │
-│       │                                                     │
-│       ▼                                                     │
-│  Raw Skeletal Data (T, 42, 7)                               │
-│       │                                                     │
-│       ▼                                                     │
-│  ┌───────────────────────────────────┐                      │
-│  │  FRONTEND (replaces Mel Spectrogram)                     │
-│  │  ┌─────────────────────────┐                             │
-│  │  │ Temporal Patch Embedding│  Groups P frames → patches  │
-│  │  │ (T,42,7) → (T/P, d)    │  Reduces sequence T → T/P  │
-│  │  └────────┬────────────────┘                             │
-│  │           ▼                                              │
-│  │  ┌─────────────────────────┐                             │
-│  │  │ ConvSPE                 │  Learns spatial-positional  │
-│  │  │ Depthwise + Pointwise   │  relationships dynamically  │
-│  │  └────────┬────────────────┘                             │
-│  │           ▼                                              │
-│  │  BatchNorm → SpatialDropout1D                            │
-│  └───────────┬───────────────────┘                          │
-│              ▼                                              │
-│  ┌───────────────────────────────────┐                      │
-│  │  ENCODER (Spatio-Temporal Blocks x N)                    │
-│  │  ┌─────────────────────────┐                             │
-│  │  │ S-MHSA                  │  Spatial: handshape at t    │
-│  │  │ (Spatial Self-Attention)│                              │
-│  │  └────────┬────────────────┘                             │
-│  │           ▼                                              │
-│  │  ┌─────────────────────────┐                             │
-│  │  │ T-MHSA + RPE            │  Temporal: motion over time│
-│  │  │ (Temporal Self-Attention)│                             │
-│  │  └────────┬────────────────┘                             │
-│  │           ▼                                              │
-│  │  ┌─────────────────────────┐                             │
-│  │  │ Feed-Forward (Pre-Norm) │  GELU activation            │
-│  │  └────────┬────────────────┘                             │
-│  └───────────┼───────────────────┘                          │
-│              ▼                                              │
-│  ┌───────────────────────────────────┐                      │
-│  │  DECODER (Two-Pass)                                      │
-│  │                                                          │
-│  │  Pass 1: CTC Head ──────► Fast monotonic alignment       │
-│  │          (Linear → LogSoftmax → Greedy Decode)           │
-│  │                                                          │
-│  │  Pass 2: Attention Decoder ─► Rescoring for accuracy     │
-│  │          (Transformer Decoder with causal mask)          │
-│  └───────────┬───────────────────┘                          │
-│              ▼                                              │
-│       Sign Glosses: ["hello", "thank_you", "please"]        │
-└─────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TD
+    A[Leap Motion / MediaPipe] --> B["Raw Skeletal Data (T, 42, 7)"]
+
+    subgraph Frontend ["FRONTEND (replaces Mel Spectrogram)"]
+        B --> C["Temporal Patch Embedding\n(T,42,7) to (T/P, d_model)"]
+        C --> D["ConvSPE\nDepthwise + Pointwise Conv"]
+        D --> E["BatchNorm + SpatialDropout1D"]
+    end
+
+    subgraph Encoder ["ENCODER (Spatio-Temporal Blocks x N)"]
+        E --> F["S-MHSA\nSpatial Self-Attention\n(handshape at time t)"]
+        F --> G["T-MHSA + RPE\nTemporal Self-Attention\n(motion over time)"]
+        G --> H["Feed-Forward (Pre-Norm)\nGELU activation"]
+    end
+
+    subgraph Decoder ["DECODER (Two-Pass)"]
+        H --> I["Pass 1: CTC Head\nLinear + LogSoftmax + Greedy Decode"]
+        H --> J["Pass 2: Attention Decoder\nTransformer Decoder + Causal Mask"]
+    end
+
+    I --> K["Sign Glosses Output"]
+    J --> K
 ```
 
 ### Key Architecture Decisions
@@ -95,10 +80,10 @@ The model outputs **sign glosses** — semantic labels for individual signs — 
 | Component | Design Choice | Rationale |
 |-----------|--------------|-----------|
 | **Frontend** | Temporal Patch Embedding (not Conv2D) | Skeletal data is structured (joints x features), not pixels. Patches group P consecutive frames. |
-| **Positional Encoding** | ConvSPE (learned, convolutional) | Hand skeleton has fixed topology — learned spatial relationships outperform sinusoidal PE. |
+| **Positional Encoding** | ConvSPE (learned, convolutional) | Hand skeleton has fixed topology. Learned spatial relationships outperform sinusoidal PE. |
 | **Encoder Attention** | Dual S-MHSA + T-MHSA (not unified) | Separating spatial and temporal attention allows the model to independently reason about handshape vs motion. |
 | **Temporal Attention** | Relative Positional Encoding (RPE) | Sign dynamics depend on relative timing between movements, not absolute position. |
-| **Decoder** | CTC + Attention (two-pass) | CTC provides fast, monotonic alignment; Attention rescoring improves accuracy. Hybrid loss: `L = a*CTC + (1-a)*Attention`. |
+| **Decoder** | CTC + Attention (two-pass) | CTC provides fast monotonic alignment. Attention rescoring improves accuracy. Hybrid loss: `L = a*CTC + (1-a)*Attention`. |
 | **Normalization** | Pre-Norm (LayerNorm before attention) | More stable training with deeper networks, better gradient flow. |
 
 ---
@@ -106,19 +91,19 @@ The model outputs **sign glosses** — semantic labels for individual signs — 
 ## Features
 
 ### Data Pipeline
-- **Spline Interpolation Resampling** — Converts variable frame rates to fixed 60 Hz using cubic spline interpolation
-- **Hand-Centric Spatial Normalization** — Translates coordinates so palm joint is at origin (left and right hands independently)
-- **Scale Normalization** — Normalizes by metacarpal bone length for hand-size invariance
-- **Feature Scaling** — StandardScaler or MinMaxScaler applied across the dataset
-- **Gesture Masking Augmentation** — Randomly masks joints or temporal segments (like SpecAugment for audio)
-- **Temporal Jitter** — Random frame shifting for temporal robustness
-- **Noise Injection** — Gaussian noise to simulate sensor inaccuracy
+- **Spline Interpolation Resampling** -- Converts variable frame rates to fixed 60 Hz using cubic spline interpolation
+- **Hand-Centric Spatial Normalization** -- Translates coordinates so palm joint is at origin (left and right hands independently)
+- **Scale Normalization** -- Normalizes by metacarpal bone length for hand-size invariance
+- **Feature Scaling** -- StandardScaler or MinMaxScaler applied across the dataset
+- **Gesture Masking Augmentation** -- Randomly masks joints or temporal segments (like SpecAugment for audio)
+- **Temporal Jitter** -- Random frame shifting for temporal robustness
+- **Noise Injection** -- Gaussian noise to simulate sensor inaccuracy
 
 ### Model
-- **4.2M parameters** (base config, d_model=512) — lightweight enough for real-time inference
-- **Configurable depth** — Scale from tiny (d_model=128) to large (d_model=768)
-- **Freeze/Unfreeze API** — Selective component training for transfer learning
-- **Checkpoint save/load** — Full state persistence including epoch, loss, and config
+- **4.2M parameters** (base config, d_model=512) -- lightweight enough for real-time inference
+- **Configurable depth** -- Scale from tiny (d_model=128) to large (d_model=768)
+- **Freeze/Unfreeze API** -- Selective component training for transfer learning
+- **Checkpoint save/load** -- Full state persistence including epoch, loss, and config
 
 ### Training
 - **3-Stage Progressive Training**
@@ -126,14 +111,14 @@ The model outputs **sign glosses** — semantic labels for individual signs — 
   - Stage 2: Joint training with hybrid CTC-Attention loss
   - Stage 3: Real-time optimization with sliding window augmentation
 - **Hybrid CTC-Attention Loss** with configurable weight
-- **Cosine Warmup Scheduler** — Linear warmup followed by cosine annealing
-- **Gradient Clipping** — Prevents training instability
-- **TensorBoard Logging** — Real-time loss and metric visualization
+- **Cosine Warmup Scheduler** -- Linear warmup followed by cosine annealing
+- **Gradient Clipping** -- Prevents training instability
+- **TensorBoard Logging** -- Real-time loss and metric visualization
 
 ### Inference
-- **Sliding Window Inference** — Process continuous streams in real-time with configurable overlap
-- **Moving Average Smoothing** — Reduces sensor noise in live data
-- **MediaPipe Integration** — Extract hand keypoints directly from video
+- **Sliding Window Inference** -- Process continuous streams in real-time with configurable overlap
+- **Moving Average Smoothing** -- Reduces sensor noise in live data
+- **MediaPipe Integration** -- Extract hand keypoints directly from video
 
 ---
 
@@ -160,16 +145,36 @@ The model outputs **sign glosses** — semantic labels for individual signs — 
 
 ### Training Pipeline
 
-```
-Stage 1: Frontend Warm-up          Stage 2: Joint Training          Stage 3: Real-time Opt.
-┌──────────────────────┐     ┌──────────────────────────┐     ┌────────────────────────┐
-│ Frontend: TRAINABLE  │     │ Frontend: TRAINABLE      │     │ Frontend: TRAINABLE    │
-│ Encoder:  FROZEN     │ ──► │ Encoder:  TRAINABLE      │ ──► │ Encoder:  TRAINABLE    │
-│ Decoder:  FROZEN     │     │ Decoder:  TRAINABLE      │     │ Decoder:  TRAINABLE    │
-│ LR: 1e-3             │     │ LR: 5e-5                 │     │ LR: 1e-5              │
-│ Loss: CTC only       │     │ Loss: 0.3*CTC + 0.7*ATT │     │ Loss: 0.3*CTC+0.7*ATT │
-│ Epochs: 30           │     │ Epochs: 100              │     │ Epochs: 30             │
-└──────────────────────┘     └──────────────────────────┘     └────────────────────────┘
+```mermaid
+flowchart LR
+    subgraph S1 ["Stage 1: Frontend Warm-up"]
+        direction TB
+        S1A["Frontend: TRAINABLE"]
+        S1B["Encoder: FROZEN"]
+        S1C["Decoder: FROZEN"]
+        S1D["LR: 1e-3 | Epochs: 30"]
+        S1E["Loss: CTC only"]
+    end
+
+    subgraph S2 ["Stage 2: Joint Training"]
+        direction TB
+        S2A["Frontend: TRAINABLE"]
+        S2B["Encoder: TRAINABLE"]
+        S2C["Decoder: TRAINABLE"]
+        S2D["LR: 5e-5 | Epochs: 100"]
+        S2E["Loss: 0.3*CTC + 0.7*ATT"]
+    end
+
+    subgraph S3 ["Stage 3: Real-time Opt."]
+        direction TB
+        S3A["Frontend: TRAINABLE"]
+        S3B["Encoder: TRAINABLE"]
+        S3C["Decoder: TRAINABLE"]
+        S3D["LR: 1e-5 | Epochs: 30"]
+        S3E["Loss: 0.3*CTC + 0.7*ATT"]
+    end
+
+    S1 --> S2 --> S3
 ```
 
 ---
@@ -191,9 +196,9 @@ The model has been verified with **112 tests** across two test suites:
 - **Causal Mask**: Verified no future information leakage in attention decoder
 - **Encoder Masking**: Padded positions properly ignored (cosine similarity = 0.975)
 - **RPE**: Shift-invariant, distance-differentiating relative position encoding
-- **Memorization**: Loss 3.678 to 0.006 in 80 steps, 4/4 samples decoded correctly
+- **Memorization**: Loss dropped from 3.678 to 0.006 in 80 steps, 4/4 samples decoded correctly
 - **Gradient Health**: No vanishing/exploding, frontend-to-encoder ratio = 1.3x
-- **End-to-End**: Full numpy to normalize to preprocess to model to decode pipeline
+- **End-to-End**: Full pipeline from numpy input to decoded sign glosses
 
 Run the tests:
 ```bash
@@ -209,7 +214,7 @@ python scripts/functional_test.py
 ### Installation
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/Whisper_modification.git
+git clone https://github.com/minhduc110207/Whisper_modification.git
 cd Whisper_modification
 pip install -r requirements.txt
 ```
@@ -218,6 +223,19 @@ pip install -r requirements.txt
 
 ```bash
 python scripts/smoke_test.py
+```
+
+### Data Preparation (Vietnamese Sign Language)
+
+```bash
+# Option 1: From Kaggle VSL dataset (videos)
+python scripts/prepare_vsl_data.py --source kaggle --data_dir data/raw/kaggle_vsl
+
+# Option 2: From HuggingFace VOYA_VSL (pre-extracted keypoints)
+python scripts/prepare_vsl_data.py --source huggingface
+
+# Option 3: From your own video collection
+python scripts/prepare_vsl_data.py --source video --data_dir path/to/videos --label_csv labels.csv
 ```
 
 ### Training
@@ -231,6 +249,8 @@ python scripts/train.py --config configs/config.yaml --stage 3 --resume checkpoi
 
 python scripts/train.py --config configs/config.yaml --device cuda
 ```
+
+For the complete training process, see [TRAINING.md](TRAINING.md).
 
 ### Inference
 
@@ -298,9 +318,9 @@ Whisper_modification/
 │   ├── train.py
 │   ├── smoke_test.py
 │   ├── deep_test.py
-│   └── functional_test.py
-├── tests/
-│   └── test_model.py
+│   ├── functional_test.py
+│   └── prepare_vsl_data.py
+├── TRAINING.md
 ├── COLAB_TRAINING_GUIDE.md
 ├── requirements.txt
 └── README.md
@@ -364,9 +384,9 @@ data/processed/
 
 ## References
 
-- [Whisper: Robust Speech Recognition via Large-Scale Weak Supervision](https://arxiv.org/abs/2212.04356) — Radford et al., 2022
-- [CTC: Connectionist Temporal Classification](https://www.cs.toronto.edu/~graves/icml_2006.pdf) — Graves et al., 2006
-- [MediaPipe Hands](https://google.github.io/mediapipe/solutions/hands.html) — Google, 2020
+- [Whisper: Robust Speech Recognition via Large-Scale Weak Supervision](https://arxiv.org/abs/2212.04356) -- Radford et al., 2022
+- [CTC: Connectionist Temporal Classification](https://www.cs.toronto.edu/~graves/icml_2006.pdf) -- Graves et al., 2006
+- [MediaPipe Hands](https://google.github.io/mediapipe/solutions/hands.html) -- Google, 2020
 
 ---
 

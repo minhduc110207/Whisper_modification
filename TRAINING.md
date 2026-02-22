@@ -1,6 +1,6 @@
 # WhisperSign Training Guide
 
-Complete guide to training WhisperSign with Vietnamese Sign Language data.
+Complete guide to training WhisperSign with **Vietnamese Sign Language (VSL)** data.
 
 ---
 
@@ -26,7 +26,7 @@ The model replaces Whisper's audio frontend with a skeletal data frontend. If we
 ### Stage 1: Frontend Warm-up (30 epochs)
 
 ```
-Frontend: TRAINABLE    <-- Only this learns
+Frontend: TRAINABLE    (only this learns)
 Encoder:  FROZEN
 Decoder:  FROZEN
 Loss:     CTC only
@@ -45,8 +45,8 @@ LR:       1e-3 (high, fast convergence)
 
 ```
 Frontend: TRAINABLE
-Encoder:  TRAINABLE    <-- Now unfrozen
-Decoder:  TRAINABLE    <-- Now unfrozen
+Encoder:  TRAINABLE    (now unfrozen)
+Decoder:  TRAINABLE    (now unfrozen)
 Loss:     0.3 * CTC + 0.7 * Attention (hybrid)
 LR:       5e-5 (low, preserve encoder knowledge)
 ```
@@ -100,18 +100,7 @@ where:
 - **Cosine Warmup Scheduler**: Linear warmup for `warmup_steps` steps, then cosine annealing decay
 - **Gradient clipping** at 1.0 (prevents exploding gradients)
 
-```
-LR
- ^
- |     /\
- |    /  \
- |   /    \___
- |  /         \___
- | /              \___
- |/                   \___
- +--------------------------> steps
-   warmup    cosine decay
-```
+The learning rate schedule ramps up linearly during warmup, then decays following a cosine curve to near zero.
 
 ---
 
@@ -342,20 +331,9 @@ Key metrics to watch:
 
 ### Expected Training Curves
 
-```
-Loss
- ^
- 4 |*.
-   | *.          Stage 1           Stage 2              Stage 3
- 3 |  *..
-   |    *..
- 2 |      **..
-   |         ***...
- 1 |              ******.....
-   |                       ********......
- 0 +--|---------|-------|----------|---------|---------> Epoch
-   0  10       30      60         100      130       160
-```
+- **Epochs 0-30 (Stage 1):** Loss drops sharply from ~4.0 to ~1.5 as the frontend learns spatial patterns
+- **Epochs 30-130 (Stage 2):** Loss decreases steadily from ~1.5 to ~0.3 as encoder/decoder adapt
+- **Epochs 130-160 (Stage 3):** Loss stabilizes around ~0.1-0.3 during fine-tuning
 
 ### Inference Test
 
