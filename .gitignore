@@ -1,0 +1,44 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environments
+venv/
+env/
+.venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Project artifacts
+checkpoints/
+logs/
+data/
+*.pt
+*.pth
+
+# Test output
+test_output.txt
+test_results.txt
+test_results_final.txt
+functional_results.txt
+
+# Misc
+pdf_content.txt
+*.log
+.env
