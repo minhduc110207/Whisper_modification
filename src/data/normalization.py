@@ -50,10 +50,22 @@ class SpatialNormalizer:
 
 class ScaleNormalizer:
     """
-    Scale Invariance normalization.
-    Normalizes distances from joints to palm to [0, 1] range
-    by dividing by the average metacarpal bone length.
+    Bone-Length-Based Scale Invariance normalization.
+
+    Normalizes joint positions by dividing by the total bone chain length
+    of the middle finger (Wrist→MCP→PIP→DIP→TIP), providing anatomically
+    correct scale invariance across different hand sizes.
+
+    Formula: P_hat_i = P_i / L_ref
+    where L_ref = sum of 4 bone lengths along the middle finger chain.
+
+    After normalization, a fully extended fingertip position ≈ 1.0,
+    regardless of whether the hand belongs to a child or an adult.
     """
+
+    # MediaPipe middle finger bone chain (per-hand, 0-indexed)
+    # Wrist(0)→MCP(9)→PIP(10)→DIP(11)→TIP(12)
+    MIDDLE_FINGER_BONES = [(0, 9), (9, 10), (10, 11), (11, 12)]
 
     def __init__(self, num_left_joints: int = 21, num_right_joints: int = 21):
         self.num_left = num_left_joints
@@ -61,27 +73,38 @@ class ScaleNormalizer:
 
     def _compute_hand_scale(self, hand_data: np.ndarray, palm_idx: int = 0) -> float:
         """
-        Compute the average metacarpal bone length for scaling.
+        Compute the reference bone chain length for scaling.
+
+        Sums the Euclidean lengths of all 4 bones in the middle finger
+        chain (Metacarpal + Proximal + Intermediate + Distal) and averages
+        across all frames for temporal stability.
 
         Args:
             hand_data: Shape (T, 21, F) - one hand's data
-            palm_idx: Index of palm joint (always 0 within the hand)
+            palm_idx: Index of palm/wrist joint (always 0 within the hand)
 
         Returns:
-            Average scale factor
+            Average total bone chain length (scalar)
         """
-        # Use middle finger MCP (index 9) to palm as reference
-        palm_pos = hand_data[:, palm_idx, :3]
-        mcp_pos = hand_data[:, 9, :3]  # Middle finger MCP
+        T = hand_data.shape[0]
+        total_bone_length = np.zeros(T)
 
-        distances = np.linalg.norm(mcp_pos - palm_pos, axis=1)
-        avg_distance = np.mean(distances)
+        for start_idx, end_idx in self.MIDDLE_FINGER_BONES:
+            bone_vec = hand_data[:, end_idx, :3] - hand_data[:, start_idx, :3]
+            total_bone_length += np.linalg.norm(bone_vec, axis=1)
 
-        return max(avg_distance, 1e-6)  # Avoid division by zero
+        # Average over time for stability against per-frame jitter
+        avg_length = np.mean(total_bone_length)
+
+        return max(avg_length, 1e-6)  # Avoid division by zero
 
     def normalize(self, data: np.ndarray) -> np.ndarray:
         """
-        Apply scale normalization.
+        Apply bone-length-based scale normalization.
+
+        Divides both position (x, y, z) and velocity (vx, vy, vz) features
+        by the reference bone chain length. Velocity must be scaled because
+        it is derived from position (v = dP/dt) and shares the same units.
 
         Args:
             data: Shape (T, 42, F), should be spatially normalized first
@@ -94,12 +117,14 @@ class ScaleNormalizer:
         # Left hand scale
         left_data = data[:, :self.num_left, :]
         left_scale = self._compute_hand_scale(left_data)
-        result[:, :self.num_left, :3] /= left_scale
+        result[:, :self.num_left, :3] /= left_scale    # Position: x, y, z
+        result[:, :self.num_left, 3:6] /= left_scale   # Velocity: vx, vy, vz
 
         # Right hand scale
         right_data = data[:, self.num_left:self.num_left + self.num_right, :]
         right_scale = self._compute_hand_scale(right_data)
         result[:, self.num_left:self.num_left + self.num_right, :3] /= right_scale
+        result[:, self.num_left:self.num_left + self.num_right, 3:6] /= right_scale
 
         return result
 

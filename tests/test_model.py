@@ -114,6 +114,58 @@ class TestNormalization:
         result = norm.normalize(data)
         assert result.shape == data.shape
 
+    def test_scale_normalization_anatomical_consistency(self):
+        """Two hands at different scales should converge after normalization."""
+        from src.data.normalization import ScaleNormalizer
+
+        norm = ScaleNormalizer()
+
+        # Create a "large adult hand" — scale factor 2.0
+        adult = np.zeros((10, NUM_JOINTS, NUM_FEATURES), dtype=np.float32)
+        # Middle finger chain for left hand: 0→9→10→11→12
+        adult[:, 9, :3] = [0.2, 0.0, 0.0]   # MCP
+        adult[:, 10, :3] = [0.4, 0.0, 0.0]  # PIP
+        adult[:, 11, :3] = [0.6, 0.0, 0.0]  # DIP
+        adult[:, 12, :3] = [0.8, 0.0, 0.0]  # TIP
+
+        # Create a "small child hand" — scale factor 1.0
+        child = np.zeros((10, NUM_JOINTS, NUM_FEATURES), dtype=np.float32)
+        child[:, 9, :3] = [0.1, 0.0, 0.0]
+        child[:, 10, :3] = [0.2, 0.0, 0.0]
+        child[:, 11, :3] = [0.3, 0.0, 0.0]
+        child[:, 12, :3] = [0.4, 0.0, 0.0]
+
+        adult_norm = norm.normalize(adult)
+        child_norm = norm.normalize(child)
+
+        # After normalization, TIP position should be ≈ 1.0 for both
+        assert np.allclose(adult_norm[:, 12, 0], child_norm[:, 12, 0], atol=1e-5)
+
+    def test_scale_normalization_zero_hand(self):
+        """Gracefully handle all-zero hand (no detection)."""
+        from src.data.normalization import ScaleNormalizer
+
+        norm = ScaleNormalizer()
+        # All-zero data simulates no hand detected
+        data = np.zeros((10, NUM_JOINTS, NUM_FEATURES), dtype=np.float32)
+
+        result = norm.normalize(data)
+        # Should not produce NaN or Inf
+        assert np.all(np.isfinite(result))
+
+    def test_scale_normalization_velocity_scaling(self):
+        """Velocity features (indices 3:6) should also be scaled."""
+        from src.data.normalization import ScaleNormalizer
+
+        norm = ScaleNormalizer()
+        data = np.ones((10, NUM_JOINTS, NUM_FEATURES), dtype=np.float32)
+        # Set recognizable velocity values
+        data[:, :, 3:6] = 2.0
+
+        result = norm.normalize(data)
+        # Velocity should be different from original (scaled by L_ref)
+        assert not np.allclose(result[:, :21, 3:6], 2.0)
+
 
 # =========================================
 # Augmentation Tests
