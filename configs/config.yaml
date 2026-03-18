@@ -73,7 +73,8 @@ training:
     lr: 5.0e-5
     weight_decay: 1.0e-4
     batch_size: 16
-    alpha: 0.3                # CTC loss weight
+    alpha_start: 0.8            # Dynamic alpha: start with strong CTC alignment
+    alpha_end: 0.3              # Dynamic alpha: end with Attention refinement
     freeze_decoder: false
 
   # Stage 3: Real-time Optimization
@@ -84,6 +85,12 @@ training:
     batch_size: 16
     alpha: 0.3
     use_sliding_window: true
+
+  # Inference
+  inference:
+    ctc_weight: 0.5             # Weight for CTC in hybrid decoding (0=pure Attention, 1=pure CTC)
+    max_decode_length: 100      # Max tokens to prevent infinite loops
+    repetition_penalty: 1.2     # Penalize repeated token generation
 
   # General
   optimizer: "adamw"

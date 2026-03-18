@@ -15,7 +15,7 @@ from typing import Optional, Dict
 from tqdm import tqdm
 
 from ..model.whisper_sign import WhisperSignModel
-from .losses import HybridCTCAttentionLoss
+from .losses import HybridCTCAttentionLoss, DynamicAlphaScheduler
 from .scheduler import CosineWarmupScheduler
 
 
@@ -57,6 +57,7 @@ class WhisperSignTrainer:
         loss_fn: HybridCTCAttentionLoss,
         epoch: int,
         stage: int,
+        alpha_scheduler: Optional[DynamicAlphaScheduler] = None,
     ) -> float:
         """Train for one epoch."""
         self.model.train()
@@ -73,6 +74,9 @@ class WhisperSignTrainer:
             # Forward pass
             outputs = self.model(features, feature_lengths)
 
+            # Get dynamic alpha if scheduler is provided
+            current_alpha = alpha_scheduler.step() if alpha_scheduler is not None else None
+
             # Compute loss
             loss_dict = loss_fn(
                 ctc_log_probs=outputs["ctc_log_probs"],
@@ -81,6 +85,7 @@ class WhisperSignTrainer:
                 output_lengths=outputs["output_lengths"],
                 label_lengths=label_lengths,
                 att_targets=labels,  # PASS LABELS AS ATTENTION TARGETS
+                alpha_override=current_alpha,
             )
 
             loss = loss_dict["total"]
@@ -106,12 +111,14 @@ class WhisperSignTrainer:
             self.writer.add_scalar("train/ctc_loss", loss_dict["ctc"].item(), self.global_step)
             if "attention" in loss_dict:
                 self.writer.add_scalar("train/att_loss", loss_dict["attention"].item(), self.global_step)
+            if "alpha" in loss_dict:
+                self.writer.add_scalar("train/alpha", loss_dict["alpha"], self.global_step)
 
             pbar.set_postfix({
                 "loss": f"{loss.item():.4f}",
                 "ctc": f"{loss_dict['ctc'].item():.4f}",
+                "alpha": f"{loss_dict.get('alpha', self.config.get('stage2', {}).get('alpha', 0.3)):.2f}",
                 "lr": f"{optimizer.param_groups[0]['lr']:.2e}",
-                "lab_len": int(label_lengths.sum()),
             })
 
         return total_loss / max(num_batches, 1)
@@ -231,25 +238,34 @@ class WhisperSignTrainer:
         total = self.model.get_num_params(trainable_only=False)
         print(f"Trainable params: {trainable:,} / {total:,}")
 
-        alpha = cfg.get("alpha", 0.3)
+        alpha_start = cfg.get("alpha_start", 0.8)
+        alpha_end = cfg.get("alpha_end", 0.3)
         optimizer = self._create_optimizer(
             lr=cfg.get("lr", 5e-5),
             weight_decay=cfg.get("weight_decay", 1e-4),
         )
         epochs = cfg.get("epochs", 100)
+        total_steps = epochs * len(train_loader)
         scheduler = CosineWarmupScheduler(
             optimizer,
             warmup_steps=self.config.get("warmup_steps", 500),
-            total_steps=epochs * len(train_loader),
+            total_steps=total_steps,
         )
-        loss_fn = HybridCTCAttentionLoss(alpha=alpha, blank_id=0)
+        loss_fn = HybridCTCAttentionLoss(alpha=alpha_end, blank_id=0)
+        alpha_sched = DynamicAlphaScheduler(
+            alpha_start=alpha_start,
+            alpha_end=alpha_end,
+            total_steps=total_steps,
+        )
+        print(f"  Dynamic Alpha: {alpha_start} -> {alpha_end} over {total_steps} steps")
 
         best_val_loss = float("inf")
         for epoch in range(1, epochs + 1):
             train_loss = self._train_one_epoch(
-                train_loader, optimizer, scheduler, loss_fn, epoch, stage=2
+                train_loader, optimizer, scheduler, loss_fn, epoch, stage=2,
+                alpha_scheduler=alpha_sched,
             )
-            print(f"  Train Loss: {train_loss:.4f}")
+            print(f"  Train Loss: {train_loss:.4f} | Alpha: {alpha_sched.get_alpha():.3f}")
 
             if val_loader is not None:
                 val_loss = self._validate(val_loader, loss_fn)

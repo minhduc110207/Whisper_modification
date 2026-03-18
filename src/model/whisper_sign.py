@@ -108,13 +108,25 @@ class WhisperSignModel(nn.Module):
             "output_lengths": output_lengths,
         }
 
-    def decode(self, features: torch.Tensor, feature_lengths: Optional[torch.Tensor] = None) -> List[List[int]]:
+    def decode(
+        self,
+        features: torch.Tensor,
+        feature_lengths: Optional[torch.Tensor] = None,
+        ctc_weight: float = 0.5,
+        max_decode_length: int = 100,
+    ) -> List[List[int]]:
         """
-        Inference: decode skeletal input to sign glosses.
+        Inference: decode skeletal input to sign glosses using hybrid CTC-Attention.
+
+        Each call decodes independently (condition_on_previous_text=False).
+        CTC provides monotonic alignment; Attention provides context-aware rescoring.
 
         Args:
             features: (B, T, 42, F)
             feature_lengths: (B,) optional
+            ctc_weight: Weight for CTC in hybrid scoring (0-1, default 0.5)
+                        Higher = safer/monotonic, Lower = more context
+            max_decode_length: Max tokens per segment (prevents infinite loops)
 
         Returns:
             List of decoded token sequences
@@ -127,7 +139,12 @@ class WhisperSignModel(nn.Module):
                 B, T_prime = x.shape[0], x.shape[1]
                 encoder_mask = torch.arange(T_prime, device=x.device).unsqueeze(0) < output_lengths.unsqueeze(1)
             encoder_output = self.encoder(x, encoder_mask)
-            return self.decoder.decode(encoder_output)
+            return self.decoder.decode(
+                encoder_output,
+                encoder_mask=encoder_mask,
+                ctc_weight=ctc_weight,
+                max_decode_length=max_decode_length,
+            )
 
     def freeze_encoder(self):
         """Freeze encoder parameters (for Stage 1 training)."""

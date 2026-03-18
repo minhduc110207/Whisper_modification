@@ -172,6 +172,7 @@ class SignLanguageFrontend(nn.Module):
         )
 
         self.conv_spe = ConvSPE(d_model=d_model)
+        self.layer_norm = nn.LayerNorm(d_model)  # Normalize after ConvSPE
 
         self.batch_norm = nn.BatchNorm1d(d_model)
         self.spatial_dropout = SpatialDropout1D(p=spatial_dropout)
@@ -200,8 +201,9 @@ class SignLanguageFrontend(nn.Module):
         # Patch embedding
         x = self.patch_embedding(x)  # (B, T', d_model)
 
-        # Positional encoding via ConvSPE
+        # Positional encoding via ConvSPE + LayerNorm
         x = self.conv_spe(x)
+        x = self.layer_norm(x)
 
         # Batch normalization (expects B, C, L)
         x = x.transpose(1, 2)  # (B, d_model, T')

@@ -4,6 +4,9 @@ WhisperSign — Real-time Leap Motion Inference
 Streams hand tracking data from Leap Motion, normalizes it,
 and runs continuous sign recognition using a sliding window.
 
+Uses hybrid CTC-Attention decoding (each segment decoded independently,
+condition_on_previous_text=False) to prevent hallucination loops.
+
 Requirements:
   - Leap Motion Controller + UltraLeap Gemini Software installed
   - pip install leap-hand-tracking (or use provided mock for testing)
@@ -50,7 +53,14 @@ def run_inference(args):
         print(f"Error loading model: {e}")
         return
 
-    # 3. Setup Processing Pipeline
+    # 3. Inference settings
+    inference_cfg = config.get("training", {}).get("inference", {})
+    ctc_weight = args.ctc_weight or inference_cfg.get("ctc_weight", 0.5)
+    max_decode_length = inference_cfg.get("max_decode_length", 100)
+    print(f"  Hybrid decode: ctc_weight={ctc_weight}, max_len={max_decode_length}")
+    print(f"  Context: condition_on_previous_text={not args.no_context}")
+
+    # 4. Setup Processing Pipeline
     adapter = LeapMotionAdapter(fps=args.fps)
     spatial_norm = SpatialNormalizer()
     scale_norm = ScaleNormalizer()
@@ -63,7 +73,7 @@ def run_inference(args):
         device=device
     )
 
-    # 4. Leap Motion Connection
+    # 5. Leap Motion Connection
     print("\nConnecting to Leap Motion sensor...")
     
     if args.mock:
@@ -126,7 +136,9 @@ def run_inference(args):
             print(f"Error connecting to Leap Motion: {e}")
             return
 
-    # 5. Main Inference Loop
+    # 6. Main Inference Loop
+    # Each window is decoded INDEPENDENTLY (condition_on_previous_text=False)
+    # No decoder state is carried between windows to prevent hallucination chains
     print("\nStarting Real-time Inference. Press Ctrl+C to stop.")
     print("-" * 50)
     
@@ -154,10 +166,13 @@ def run_inference(args):
                 keypoints = spatial_norm.normalize(keypoints)
                 keypoints = scale_norm.normalize(keypoints)
                 
-                # Infer
+                # Infer using hybrid CTC-Attention decode
+                # Each window decoded independently (no cross-window context)
                 predictions = slider.model.decode(
                     torch.from_numpy(keypoints).float().unsqueeze(0).to(device),
-                    torch.tensor([len(keypoints)], device=device)
+                    torch.tensor([len(keypoints)], device=device),
+                    ctc_weight=ctc_weight,
+                    max_decode_length=max_decode_length,
                 )
                 
                 if predictions and predictions[0]:
@@ -185,6 +200,10 @@ if __name__ == "__main__":
     parser.add_argument("--overlap", type=float, default=0.5, help="Window overlap ratio")
     parser.add_argument("--device", type=str, default="auto", help="cuda or cpu")
     parser.add_argument("--mock", action="store_true", help="Use synthetic data for testing")
+    parser.add_argument("--ctc_weight", type=float, default=None, help="CTC weight for hybrid decode (0-1)")
+    parser.add_argument("--no_context", action="store_true", default=True,
+                        help="Decode each segment independently (default: True, prevents hallucination)")
     
     args = parser.parse_args()
     run_inference(args)
+

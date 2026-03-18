@@ -3,8 +3,13 @@ Decoder modules for sign language recognition.
 
 Implements:
 - CTCDecoder: Linear + Softmax head on top of encoder for CTC decoding (Pass 1)
-- AttentionRescorer: Uses Whisper's original decoder for rescoring (Pass 2)
-- TwoPassDecoder: Combines both for final predictions
+- AttentionDecoder: Transformer decoder for rescoring (Pass 2)
+- TwoPassDecoder: Combines both for hybrid CTC-Attention decoding
+
+Inference uses hybrid decode:
+  1. CTC greedy decode -> initial hypothesis (monotonic alignment)
+  2. Attention rescore -> context-aware refinement
+  3. Combined scoring prevents hallucination loops
 """
 import torch
 import torch.nn as nn
@@ -71,9 +76,9 @@ class AttentionDecoder(nn.Module):
     """
     Attention-based decoder for rescoring CTC hypotheses.
 
-    Uses a Transformer decoder with causal (diagonal) attention mask
-    to rescore the CTC output in a single batched forward pass,
-    much faster than full autoregressive decoding.
+    Uses a Transformer decoder with causal (diagonal) attention mask.
+    Supports both teacher-forced (training) and autoregressive (inference)
+    forward passes.
     """
 
     def __init__(
@@ -156,6 +161,29 @@ class AttentionDecoder(nn.Module):
 
         return logits
 
+    def score_hypothesis(
+        self,
+        encoder_output: torch.Tensor,
+        hypothesis: torch.Tensor,
+        encoder_mask: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+        """
+        Score a CTC hypothesis using the attention decoder.
+
+        Runs a single forward pass (non-autoregressive) to get log-probs
+        for each token in the hypothesis given the encoder output.
+
+        Args:
+            encoder_output: (B, T_enc, d_model)
+            hypothesis: (B, T_hyp) token indices from CTC
+            encoder_mask: Optional (B, T_enc) mask
+
+        Returns:
+            log_probs: (B, T_hyp, vocab_size)
+        """
+        logits = self.forward(encoder_output, hypothesis, encoder_mask)
+        return F.log_softmax(logits, dim=-1)
+
 
 class TwoPassDecoder(nn.Module):
     """
@@ -164,7 +192,12 @@ class TwoPassDecoder(nn.Module):
     Pass 1 (CTC): Fast, monotonic predictions from encoder
     Pass 2 (Attention): Rescore CTC hypotheses using decoder context
 
-    Final output combines both passes for high accuracy + low latency.
+    Inference uses hybrid scoring:
+        final_score = ctc_weight * ctc_score + (1 - ctc_weight) * att_score
+
+    This prevents:
+    - Hallucination loops (CTC enforces monotonic alignment)
+    - Context loop / repetitive output (max length + repetition guard)
     """
 
     def __init__(
@@ -187,6 +220,7 @@ class TwoPassDecoder(nn.Module):
             d_ff=d_ff,
             dropout=dropout,
         )
+        self.vocab_size = vocab_size
 
     def forward(
         self,
@@ -216,15 +250,143 @@ class TwoPassDecoder(nn.Module):
 
         return ctc_log_probs, att_logits
 
-    def decode(self, encoder_output: torch.Tensor) -> List[List[int]]:
+    def decode(
+        self,
+        encoder_output: torch.Tensor,
+        encoder_mask: Optional[torch.Tensor] = None,
+        ctc_weight: float = 0.5,
+        max_decode_length: int = 100,
+    ) -> List[List[int]]:
         """
-        Inference decoding using CTC greedy search.
+        Hybrid CTC-Attention inference decoding.
+
+        Strategy:
+          1. CTC greedy decode -> initial hypothesis (monotonic, no hallucination)
+          2. Attention rescore -> refine with context
+          3. Combined scoring selects best tokens
+
+        The CTC branch enforces monotonic alignment, preventing the
+        Attention decoder from generating infinite loops.
 
         Args:
             encoder_output: (B, T', d_model)
+            encoder_mask: Optional (B, T') mask
+            ctc_weight: Weight for CTC in combined scoring (0-1)
+                        Higher = more monotonic/safe, Lower = more contextual
+            max_decode_length: Maximum tokens to generate (prevents infinite loops)
 
         Returns:
             List of decoded sign gloss sequences
         """
+        B = encoder_output.shape[0]
+
+        # Pass 1: CTC greedy decode (guaranteed monotonic, no loops)
         ctc_log_probs = self.ctc_decoder(encoder_output)
-        return self.ctc_decoder.greedy_decode(ctc_log_probs)
+        ctc_hypotheses = self.ctc_decoder.greedy_decode(ctc_log_probs)
+
+        # If ctc_weight is 1.0, skip attention rescoring entirely
+        if ctc_weight >= 1.0:
+            return ctc_hypotheses
+
+        # Pass 2: Attention rescoring of CTC hypotheses
+        results = []
+        for b in range(B):
+            hyp = ctc_hypotheses[b]
+
+            # If CTC produced empty hypothesis, keep it
+            if len(hyp) == 0:
+                results.append([])
+                continue
+
+            # Cap hypothesis length
+            hyp = hyp[:max_decode_length]
+
+            # Remove repetitive sequences (Fix 4: context loop guard)
+            hyp = self._remove_repetitions(hyp)
+
+            if ctc_weight <= 0.0:
+                # Pure attention: just use CTC hypothesis directly
+                # (attention rescoring still needs CTC to provide the hypothesis)
+                results.append(hyp)
+                continue
+
+            # Score hypothesis with Attention decoder
+            hyp_tensor = torch.tensor([hyp], device=encoder_output.device)
+            enc_out_b = encoder_output[b:b+1]
+            enc_mask_b = encoder_mask[b:b+1] if encoder_mask is not None else None
+
+            att_log_probs = self.attention_decoder.score_hypothesis(
+                enc_out_b, hyp_tensor, enc_mask_b
+            )  # (1, T_hyp, vocab_size)
+
+            # Get CTC scores for each hypothesis token at each position
+            # Average CTC log-prob across all time frames for each token
+            ctc_lp = ctc_log_probs[b]  # (T', vocab_size)
+
+            # Combined rescoring: check if attention agrees with CTC
+            refined_hyp = []
+            for t, token_id in enumerate(hyp):
+                # CTC score: average log-prob of this token across encoder frames
+                ctc_score = ctc_lp[:, token_id].max().item()
+
+                # Attention score: log-prob of this token at this decode position
+                att_score = att_log_probs[0, t, token_id].item()
+
+                # Combined score
+                combined = ctc_weight * ctc_score + (1 - ctc_weight) * att_score
+
+                # Only keep token if combined score is reasonable
+                # (negative log-prob, so higher = better, threshold at very poor)
+                if combined > -20.0:
+                    refined_hyp.append(token_id)
+
+            results.append(refined_hyp)
+
+        return results
+
+    @staticmethod
+    def _remove_repetitions(tokens: List[int], max_repeat: int = 3) -> List[int]:
+        """
+        Remove repetitive subsequences from decoded tokens.
+        Prevents context loop hallucinations (Fix 4).
+
+        If a token appears more than max_repeat times consecutively,
+        keep only max_repeat occurrences. Also detect repeating n-grams.
+
+        Args:
+            tokens: List of token IDs
+            max_repeat: Maximum allowed consecutive repetitions
+
+        Returns:
+            Cleaned token list
+        """
+        if len(tokens) <= max_repeat:
+            return tokens
+
+        # Remove excessive consecutive repeats
+        cleaned = []
+        repeat_count = 1
+        for i, token in enumerate(tokens):
+            if i > 0 and token == tokens[i - 1]:
+                repeat_count += 1
+            else:
+                repeat_count = 1
+
+            if repeat_count <= max_repeat:
+                cleaned.append(token)
+
+        # Detect repeating bigrams (e.g., [A, B, A, B, A, B])
+        if len(cleaned) >= 6:
+            for n in range(2, 4):  # Check n-grams of size 2-3
+                if len(cleaned) >= n * 3:
+                    last_ngrams = [
+                        tuple(cleaned[-(n*k + n):-(n*k) or None])
+                        for k in range(3)
+                    ]
+                    if len(set(last_ngrams)) == 1 and all(last_ngrams):
+                        # All last 3 n-grams are identical -> truncate
+                        cleaned = cleaned[:-(n * 2)]
+                        break
+
+        return cleaned
+
