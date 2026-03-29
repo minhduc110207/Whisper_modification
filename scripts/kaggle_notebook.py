@@ -90,10 +90,14 @@ frontend_path = os.path.join(PROJECT_DIR, "src", "model", "frontend.py")
 if os.path.exists(frontend_path):
     with open(frontend_path, "r", encoding="utf-8") as f:
         content = f.read()
-    if "// self.patch_size" in content:
+    if "// self.patch_size" in content or "torch.div" in content:
         content = content.replace(
             "output_lengths = (input_lengths + self.patch_size - 1) // self.patch_size",
-            "output_lengths = torch.div(input_lengths + self.patch_size - 1, self.patch_size, rounding_mode='floor')"
+            "output_lengths = ((input_lengths.float() + self.patch_size - 1) / float(self.patch_size)).long()"
+        )
+        content = content.replace(
+            "output_lengths = torch.div(input_lengths + self.patch_size - 1, self.patch_size, rounding_mode='floor')",
+            "output_lengths = ((input_lengths.float() + self.patch_size - 1) / float(self.patch_size)).long()"
         )
         with open(frontend_path, "w", encoding="utf-8") as f:
             f.write(content)
