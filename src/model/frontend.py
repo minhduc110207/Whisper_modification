@@ -194,7 +194,8 @@ class SignLanguageFrontend(nn.Module):
         """
         # Compute output lengths
         if input_lengths is not None:
-            output_lengths = (input_lengths + self.patch_size - 1) // self.patch_size
+            # Use torch.div with rounding_mode to avoid missing CUDA integer kernels on older GPUs (P100/T4)
+            output_lengths = torch.div(input_lengths + self.patch_size - 1, self.patch_size, rounding_mode='floor')
         else:
             output_lengths = None
 
