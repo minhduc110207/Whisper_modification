@@ -85,6 +85,20 @@ if not os.path.exists("src"):
 if PROJECT_DIR not in sys.path:
     sys.path.insert(0, PROJECT_DIR)
 
+# --- Auto-Patch old code for Kaggle GPUs ---
+frontend_path = os.path.join(PROJECT_DIR, "src", "model", "frontend.py")
+if os.path.exists(frontend_path):
+    with open(frontend_path, "r", encoding="utf-8") as f:
+        content = f.read()
+    if "// self.patch_size" in content:
+        content = content.replace(
+            "output_lengths = (input_lengths + self.patch_size - 1) // self.patch_size",
+            "output_lengths = torch.div(input_lengths + self.patch_size - 1, self.patch_size, rounding_mode='floor')"
+        )
+        with open(frontend_path, "w", encoding="utf-8") as f:
+            f.write(content)
+        print("Patched frontend.py to fix CUDA integer division error!")
+
 # --- Force reload project modules ---
 def reload_project_modules():
     import importlib
