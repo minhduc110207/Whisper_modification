@@ -124,7 +124,8 @@ class HybridCTCAttentionLoss(nn.Module):
             result["total"] = alpha * loss_ctc + (1 - alpha) * loss_att
         else:
             result["attention"] = torch.tensor(0.0, device=ctc_log_probs.device)
-            # Use alpha even if attention is missing for consistency in logging/scaling
-            result["total"] = alpha * loss_ctc
+            # When attention is unavailable (Stage 1), use pure CTC loss.
+            # Alpha scaling only makes sense when BOTH branches are active.
+            result["total"] = loss_ctc
 
         return result

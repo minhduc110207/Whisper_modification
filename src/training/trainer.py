@@ -72,19 +72,30 @@ class WhisperSignTrainer:
             label_lengths = batch["label_lengths"].to(self.device)
 
             # Forward pass
-            outputs = self.model(features, feature_lengths)
+            # Stage 1: CTC-only (no attention decoder training)
+            # Stage 2/3: Pass target tokens for attention decoder teacher-forcing
+            target_tokens = None
+            padded_labels = batch.get("padded_labels")
+            if stage >= 2 and padded_labels is not None:
+                target_tokens = padded_labels.to(self.device)
+            outputs = self.model(features, feature_lengths, target_tokens)
 
             # Get dynamic alpha if scheduler is provided
             current_alpha = alpha_scheduler.step() if alpha_scheduler is not None else None
 
             # Compute loss
+            # Use padded_labels for attention targets (B, T_dec) when available
+            att_targets = None
+            if outputs.get("att_logits") is not None and padded_labels is not None:
+                att_targets = padded_labels.to(self.device)
+
             loss_dict = loss_fn(
                 ctc_log_probs=outputs["ctc_log_probs"],
                 att_logits=outputs.get("att_logits"),
                 labels=labels,
                 output_lengths=outputs["output_lengths"],
                 label_lengths=label_lengths,
-                att_targets=labels,  # PASS LABELS AS ATTENTION TARGETS
+                att_targets=att_targets,
                 alpha_override=current_alpha,
             )
 

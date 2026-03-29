@@ -318,7 +318,7 @@ def collate_fn(batch: List[Dict]) -> Dict[str, torch.Tensor]:
 
     Returns:
         Dictionary with padded features, concatenated labels,
-        and length tensors for CTC loss.
+        padded labels for attention decoder, and length tensors.
     """
     features = torch.stack([s["features"] for s in batch])
     feature_lengths = torch.stack([s["feature_length"] for s in batch])
@@ -327,9 +327,20 @@ def collate_fn(batch: List[Dict]) -> Dict[str, torch.Tensor]:
     # Concatenate labels (CTC loss expects flat labels)
     labels = torch.cat([s["labels"] for s in batch])
 
+    # Padded labels for attention decoder teacher-forcing (B, max_label_len)
+    # Padding value -1 is ignored by nn.CrossEntropyLoss(ignore_index=-1)
+    max_label_len = max(s["labels"].shape[0] for s in batch)
+    max_label_len = max(max_label_len, 1)  # Ensure at least length 1
+    padded_labels = torch.full((len(batch), max_label_len), -1, dtype=torch.long)
+    for i, s in enumerate(batch):
+        length = s["labels"].shape[0]
+        if length > 0:
+            padded_labels[i, :length] = s["labels"]
+
     return {
         "features": features,
         "labels": labels,
+        "padded_labels": padded_labels,
         "feature_lengths": feature_lengths,
         "label_lengths": label_lengths,
     }
