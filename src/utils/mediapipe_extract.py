@@ -154,3 +154,77 @@ def extract_from_dataset(
         output_path = os.path.join(output_dir, f"{sample_id}.npy")
         np.save(output_path, keypoints.astype(np.float32))
         print(f"  Saved: {output_path} | Shape: {keypoints.shape}")
+
+
+class MediaPipeAdapter:
+    """
+    Adapter for real-time MediaPipe hand tracking results.
+    Accumulates frames, computes velocities, and formats for WhisperSign (T, 42, 7).
+    """
+
+    def __init__(self, fps: float = 30.0):
+        """
+        Args:
+            fps: Expected frame rate of the input stream.
+        """
+        self.fps = fps
+        self._frame_buffer = []
+
+    def process_results(self, results) -> np.ndarray:
+        """
+        Convert MediaPipe Hand results object to a single (42, 7) frame.
+        
+        Args:
+            results: MediaPipe hands.process() output.
+            
+        Returns:
+            (42, 7) numpy array.
+        """
+        frame = np.zeros((42, 7), dtype=np.float32)
+        
+        if results.multi_hand_landmarks and results.multi_handedness:
+            for hand_landmarks, handedness in zip(
+                results.multi_hand_landmarks, results.multi_handedness
+            ):
+                label = handedness.classification[0].label
+                confidence = handedness.classification[0].score
+                
+                # Left=0, Right=21
+                offset = 0 if label == "Left" else 21
+                
+                for i, lm in enumerate(hand_landmarks.landmark):
+                    idx = offset + i
+                    frame[idx, 0] = lm.x
+                    frame[idx, 1] = lm.y
+                    frame[idx, 2] = lm.z
+                    frame[idx, 6] = confidence
+                    
+        return frame
+
+    def add_frame(self, results):
+        """
+        Add a MediaPipe results object to the internal buffer.
+        """
+        frame = self.process_results(results)
+        self._frame_buffer.append(frame)
+
+    def get_sequence(self, clear_buffer: bool = True) -> np.ndarray:
+        """
+        Get the accumulated sequence with velocities computed.
+        """
+        if not self._frame_buffer:
+            return np.zeros((0, 42, 7), dtype=np.float32)
+
+        sequence = np.stack(self._frame_buffer)
+        
+        # Compute velocities (vx, vy, vz) in features 3, 4, 5
+        if sequence.shape[0] > 1:
+            dt = 1.0 / self.fps
+            velocity = np.gradient(sequence[:, :, :3], dt, axis=0)
+            sequence[:, :, 3:6] = velocity
+            
+        if clear_buffer:
+            self._frame_buffer = []
+            
+        return sequence
+

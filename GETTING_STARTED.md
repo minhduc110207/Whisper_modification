@@ -580,6 +580,7 @@ import torch, json
 from src.model.whisper_sign import WhisperSignModel
 from src.utils.mediapipe_extract import extract_hand_keypoints
 from src.data.normalization import SpatialNormalizer, ScaleNormalizer
+from src.data.preprocessing import preprocess_sequence
 
 # 1. Load model
 model, _ = WhisperSignModel.load_checkpoint("checkpoints/final_model.pt")
@@ -596,13 +597,16 @@ id_to_gloss = {v: k for k, v in label_map.items()}
 keypoints, timestamps = extract_hand_keypoints("my_sign_video.mp4")
 print(f"Extracted {len(keypoints)} frames")
 
-# 4. Normalize (same pipeline as training!)
+# 4. Normalize and Preprocess (same pipeline as training!)
 keypoints = SpatialNormalizer().normalize(keypoints)
 keypoints = ScaleNormalizer().normalize(keypoints)
 
+original_length = keypoints.shape[0]
+keypoints = preprocess_sequence(keypoints, max_seq_length=400)
+
 # 5. Inference
 x = torch.from_numpy(keypoints).float().unsqueeze(0).to(device)
-lengths = torch.tensor([keypoints.shape[0]], device=device)
+lengths = torch.tensor([original_length], device=device)
 
 with torch.no_grad():
     predictions = model.decode(x, lengths)
@@ -638,12 +642,15 @@ keypoints = adapter.from_numpy(leap_data, hand_type="right", input_format="joint
 # From CSV export:
 # keypoints = adapter.from_csv("recording.csv", hand_type="right")
 
-# Then normalize + infer (same as MediaPipe)
+# Then normalize + preprocess (same as MediaPipe)
 keypoints = SpatialNormalizer().normalize(keypoints)
 keypoints = ScaleNormalizer().normalize(keypoints)
 
+original_length = keypoints.shape[0]
+keypoints = preprocess_sequence(keypoints, max_seq_length=400)
+
 x = torch.from_numpy(keypoints).float().unsqueeze(0).to(device)
-lengths = torch.tensor([keypoints.shape[0]], device=device)
+lengths = torch.tensor([original_length], device=device)
 
 with torch.no_grad():
     predictions = model.decode(x, lengths)
@@ -661,7 +668,54 @@ print(f"Recognized: {' '.join(glosses)}")
 
 ---
 
-### Option C: Real-Time Streaming (Continuous Recognition)
+### Option C: Real-Time MediaPipe (Webcam)
+
+```bash
+# Run the provided inference script
+python scripts/mediapipe_realtime_inference.py \
+  --checkpoint checkpoints/final_model.pt \
+  --config configs/config.yaml \
+  --fps 30
+```
+
+**How it works (Code snippet):**
+```python
+import cv2
+import mediapipe as mp
+from src.utils.mediapipe_extract import MediaPipeAdapter
+from src.utils.sliding_window import SlidingWindowInference
+
+# 1. Setup
+adapter = MediaPipeAdapter(fps=30)
+detector = mp.solutions.hands.Hands()
+cap = cv2.VideoCapture(0)
+
+# 2. Loop
+while cap.isOpened():
+    ret, frame = cap.read()
+    results = detector.process(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+    
+    # Add frame to buffer
+    adapter.add_frame(results)
+    
+    # When buffer is full (e.g. 3 seconds), get sequence and infer
+    if len(adapter._frame_buffer) >= 90:
+        kp = adapter.get_sequence(clear_buffer=False)
+        # Shift buffer for sliding window
+        adapter._frame_buffer = adapter._frame_buffer[45:] 
+        
+        # Normalize + model.decode(...)
+        # (See scripts/mediapipe_realtime_inference.py for full logic)
+```
+
+> **⚠️ Problem: Video lags or feels slow**
+> - Reduce `fps` to 15 or 20 (and update the `--fps` argument)
+> - Use a smaller `window_duration` (e.g., 2.0s)
+> - Ensure you are using a GPU if available (`--device cuda`)
+
+---
+
+### Option D: Real-Time Streaming (Continuous Recognition)
 
 ```python
 from src.utils.sliding_window import SlidingWindowInference
@@ -720,6 +774,7 @@ import torch, json
 from src.model.whisper_sign import WhisperSignModel
 from src.utils.mediapipe_extract import extract_hand_keypoints
 from src.data.normalization import SpatialNormalizer, ScaleNormalizer
+from src.data.preprocessing import preprocess_sequence
 
 model, _ = WhisperSignModel.load_checkpoint('checkpoints/final_model.pt')
 model.eval()
@@ -727,13 +782,15 @@ model.eval()
 kp, _ = extract_hand_keypoints('my_video.mp4')
 kp = SpatialNormalizer().normalize(kp)
 kp = ScaleNormalizer().normalize(kp)
+orig_len = len(kp)
+kp = preprocess_sequence(kp, max_seq_length=400)
 x = torch.from_numpy(kp).float().unsqueeze(0)
 
 with open('data/processed/label_map.json') as f:
     lm = json.load(f)
 id2g = {v:k for k,v in lm.items()}
 
-preds = model.decode(x, torch.tensor([len(kp)]))[0]
+preds = model.decode(x, torch.tensor([orig_len]))[0]
 print([id2g.get(p,'?') for p in preds])
 "
 ```
