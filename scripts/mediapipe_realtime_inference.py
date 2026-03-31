@@ -43,7 +43,13 @@ def run_inference(args):
         return
 
     # 3. Setup Processing Pipeline
-    adapter = MediaPipeAdapter(fps=args.fps)
+    adapter = MediaPipeAdapter(
+        fps=args.fps,
+        use_smoothing=args.smoothing,
+        min_cutoff=args.min_cutoff,
+        beta=args.beta,
+        min_confidence=args.min_confidence
+    )
     spatial_norm = SpatialNormalizer()
     scale_norm = ScaleNormalizer()
     
@@ -108,20 +114,34 @@ def run_inference(args):
                 keypoints = spatial_norm.normalize(keypoints)
                 keypoints = scale_norm.normalize(keypoints)
                 
-                # Infer using hybrid CTC-Attention decode
-                predictions = slider.model.decode(
-                    torch.from_numpy(keypoints).float().unsqueeze(0).to(device),
-                    torch.tensor([len(keypoints)], device=device),
-                    ctc_weight=0.5
-                )
+                # Movement check: check if hands are visible and actually moving
+                # (Prevents hallucinations and frozen frames when user is idle)
+                avg_conf = np.mean(keypoints[:, :, 6])
+                pos_std = np.mean(np.std(keypoints[:, :, :3], axis=0))
                 
-                if predictions and predictions[0]:
-                    gloss_ids = predictions[0]
-                    glosses = [id_to_gloss.get(gid, f"?{gid}") for gid in gloss_ids]
+                is_visible = avg_conf >= 0.1
+                is_moving = pos_std >= args.motion_threshold
+                
+                if not is_visible or not is_moving:
+                    last_pred = [] # Clear last prediction if nothing moving
+                else:
+                    # Infer using hybrid CTC-Attention decode
+                    predictions = slider.model.decode(
+                        torch.from_numpy(keypoints).float().unsqueeze(0).to(device),
+                        torch.tensor([len(keypoints)], device=device),
+                        ctc_weight=args.ctc_weight
+                    )
                     
-                    if glosses != last_pred:
-                        print(f"[{time.strftime('%H:%M:%S')}] Recognized: {' '.join(glosses)}")
-                        last_pred = glosses
+                    if predictions and predictions[0]:
+                        gloss_ids = predictions[0]
+                        glosses = [id_to_gloss.get(gid, f"?{gid}") for gid in gloss_ids]
+                        
+                        # Filter out CTC blanks if any leaked through
+                        glosses = [g for g in glosses if g != "<blank>"]
+                        
+                        if glosses != last_pred and len(glosses) > 0:
+                            print(f"[{time.strftime('%H:%M:%S')}] Recognized: {' '.join(glosses)}")
+                            last_pred = glosses
 
             # UI Overlay
             status_text = f"Recognized: {' '.join(last_pred)}" if last_pred else "Listening..."
@@ -149,6 +169,14 @@ if __name__ == "__main__":
     parser.add_argument("--camera_id", type=int, default=0, help="Webcam device ID")
     parser.add_argument("--confidence", type=float, default=0.5, help="Detection confidence")
     parser.add_argument("--device", type=str, default="auto", help="cuda or cpu")
+    
+    # MediaPipe Optimization Args
+    parser.add_argument("--smoothing", type=bool, default=True, help="Enable OneEuroFilter")
+    parser.add_argument("--min_cutoff", type=float, default=0.5, help="Smoothing min cutoff (lower = smoother)")
+    parser.add_argument("--beta", type=float, default=0.01, help="Smoothing speed coefficient (lower = less lag)")
+    parser.add_argument("--min_confidence", type=float, default=0.4, help="Landmark confidence threshold")
+    parser.add_argument("--motion_threshold", type=float, default=0.005, help="Minimum motion variance to trigger inference")
+    parser.add_argument("--ctc_weight", type=float, default=0.7, help="CTC weight for stable decoding (0.0-1.0)")
     
     args = parser.parse_args()
     run_inference(args)
