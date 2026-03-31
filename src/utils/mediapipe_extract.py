@@ -209,6 +209,7 @@ class MediaPipeAdapter:
     def __init__(
         self,
         fps: float = 30.0,
+        target_fps: float = 60.0,
         use_smoothing: bool = True,
         min_cutoff: float = 0.5,
         beta: float = 0.01,
@@ -216,19 +217,23 @@ class MediaPipeAdapter:
     ):
         """
         Args:
-            fps: Expected frame rate of the input stream.
+            fps: Expected frame rate of the input stream (e.g. webcam).
+            target_fps: Target frame rate expected by the model (e.g. 60).
             use_smoothing: Enable OneEuroFilter.
             min_cutoff: Smoothing cutoff at zero velocity (higher = less smooth).
             beta: Speed coefficient for adaptive smoothing (higher = less lag).
             min_confidence: Landmark confidence threshold.
         """
         self.fps = fps
+        self.target_fps = target_fps
         self.use_smoothing = use_smoothing
         self.min_cutoff = min_cutoff
         self.beta = beta
         self.min_confidence = min_confidence
         
         self._frame_buffer = []
+        self._timestamps = []
+        self._start_time = None
         self._filters = None  # Lazy init on first frame
         self._last_valid_frame = None
         self._frame_count = 0
@@ -295,6 +300,11 @@ class MediaPipeAdapter:
                     # Only smooth position (features 0,1,2)
                     frame[j, :3] = self._filters[j](t, frame[j, :3])
         
+        import time
+        if self._start_time is None:
+            self._start_time = time.time()
+        self._timestamps.append(time.time() - self._start_time)
+        
         self._frame_buffer.append(frame)
         self._frame_count += 1
 
@@ -307,14 +317,27 @@ class MediaPipeAdapter:
 
         sequence = np.stack(self._frame_buffer)
         
+        # Resample to target_fps if needed
+        import math
+        if self.target_fps and not math.isclose(self.fps, self.target_fps) and len(self._frame_buffer) > 1:
+            from ..data.preprocessing import resample_to_fixed_rate
+            timestamp_arr = np.array(self._timestamps)
+            try:
+                sequence, _ = resample_to_fixed_rate(
+                    sequence, timestamp_arr, target_rate=int(self.target_fps)
+                )
+            except Exception as e:
+                print(f"Warning: Interpolation failed, falling back to raw sequence: {e}")
+        
         # Compute velocities (vx, vy, vz) in features 3, 4, 5
         if sequence.shape[0] > 1:
-            dt = 1.0 / self.fps
+            dt = 1.0 / (self.target_fps if self.target_fps else self.fps)
             velocity = np.gradient(sequence[:, :, :3], dt, axis=0)
             sequence[:, :, 3:6] = velocity
             
         if clear_buffer:
             self._frame_buffer = []
+            self._timestamps = []
             
         return sequence
 

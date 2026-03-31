@@ -43,8 +43,10 @@ def run_inference(args):
         return
 
     # 3. Setup Processing Pipeline
+    target_fps = config.get('data', {}).get('sample_rate', 60.0)
     adapter = MediaPipeAdapter(
         fps=args.fps,
+        target_fps=target_fps,
         use_smoothing=args.smoothing,
         min_cutoff=args.min_cutoff,
         beta=args.beta,
@@ -57,7 +59,7 @@ def run_inference(args):
         model,
         window_duration=args.window_duration,
         overlap=args.overlap,
-        sample_rate=args.fps,
+        sample_rate=target_fps,
         device=device
     )
 
@@ -109,6 +111,8 @@ def run_inference(args):
                 # Slicing the buffer to keep sliding (FIFO style)
                 keep_size = int(window_limit * args.overlap)
                 adapter._frame_buffer = adapter._frame_buffer[-keep_size:]
+                if hasattr(adapter, '_timestamps'):
+                    adapter._timestamps = adapter._timestamps[-keep_size:]
                 
                 # Normalize
                 keypoints = spatial_norm.normalize(keypoints)
