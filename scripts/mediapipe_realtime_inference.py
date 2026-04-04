@@ -82,7 +82,10 @@ def run_inference(args):
     print("\nStarting Real-time MediaPipe Inference. Press 'q' to stop.")
     print("-" * 50)
     
-    window_limit = int(args.window_duration * args.fps)
+    silence_counter = 0
+    silence_threshold = int(args.fps * 0.5)  # 0.5 seconds silence to trigger prediction
+    min_sequence_length = int(args.fps * 0.5)  # Minimum 0.5 seconds sequence length
+    is_recording = False
     last_pred = []
     
     try:
@@ -103,52 +106,66 @@ def run_inference(args):
             # Add to adapter
             adapter.add_frame(results)
             
-            # Check if we have enough frames for a window
-            if len(adapter._frame_buffer) >= window_limit:
-                # Get sequence and compute velocities
-                keypoints = adapter.get_sequence(clear_buffer=False)
-                
-                # Slicing the buffer to keep sliding (FIFO style)
-                keep_size = int(window_limit * args.overlap)
-                adapter._frame_buffer = adapter._frame_buffer[-keep_size:]
-                if hasattr(adapter, '_timestamps'):
-                    adapter._timestamps = adapter._timestamps[-keep_size:]
-                
-                # Normalize
-                keypoints = spatial_norm.normalize(keypoints)
-                keypoints = scale_norm.normalize(keypoints)
-                
-                # Movement check: check if hands are visible and actually moving
-                # (Prevents hallucinations and frozen frames when user is idle)
-                avg_conf = np.mean(keypoints[:, :, 6])
-                pos_std = np.mean(np.std(keypoints[:, :, :3], axis=0))
+            # Action-end based inference logic
+            if len(adapter._frame_buffer) >= 5:
+                # Check recent activity to see if moving
+                recent_frames = np.stack(adapter._frame_buffer[-5:])
+                avg_conf = np.mean(recent_frames[:, :, 6])
+                pos_std = np.mean(np.std(recent_frames[:, :, :3], axis=0))
                 
                 is_visible = avg_conf >= 0.1
                 is_moving = pos_std >= args.motion_threshold
                 
-                if not is_visible or not is_moving:
-                    last_pred = [] # Clear last prediction if nothing moving
+                if is_visible and is_moving:
+                    silence_counter = 0
+                    if not is_recording:
+                        is_recording = True
+                        last_pred = [] # Optional: clear old UI prediction at start of new action
                 else:
-                    # Infer using hybrid CTC-Attention decode
-                    predictions = slider.model.decode(
-                        torch.from_numpy(keypoints).float().unsqueeze(0).to(device),
-                        torch.tensor([len(keypoints)], device=device),
-                        ctc_weight=args.ctc_weight
-                    )
-                    
-                    if predictions and predictions[0]:
-                        gloss_ids = predictions[0]
-                        glosses = [id_to_gloss.get(gid, f"?{gid}") for gid in gloss_ids]
-                        
-                        # Filter out CTC blanks if any leaked through
-                        glosses = [g for g in glosses if g != "<blank>"]
-                        
-                        if glosses != last_pred and len(glosses) > 0:
-                            print(f"[{time.strftime('%H:%M:%S')}] Recognized: {' '.join(glosses)}")
-                            last_pred = glosses
+                    if is_recording:
+                        silence_counter += 1
+                        if silence_counter > silence_threshold:
+                            # Action is Complete: End of movement detected
+                            is_recording = False
+                            
+                            keypoints = adapter.get_sequence(clear_buffer=True)
+                            
+                            # Only predict if sequence is long enough to be an actual sign
+                            if len(keypoints) >= min_sequence_length:
+                                # Normalize
+                                keypoints = spatial_norm.normalize(keypoints)
+                                keypoints = scale_norm.normalize(keypoints)
+                                
+                                # Infer using hybrid CTC-Attention decode
+                                predictions = model.decode(
+                                    torch.from_numpy(keypoints).float().unsqueeze(0).to(device),
+                                    torch.tensor([len(keypoints)], device=device),
+                                    ctc_weight=args.ctc_weight
+                                )
+                                
+                                if predictions and predictions[0]:
+                                    gloss_ids = predictions[0]
+                                    glosses = [id_to_gloss.get(gid, f"?{gid}") for gid in gloss_ids]
+                                    
+                                    # Filter out CTC blanks if any leaked through
+                                    glosses = [g for g in glosses if g != "<blank>"]
+                                    
+                                    if len(glosses) > 0:
+                                        last_pred = glosses
+                                        print(f"[{time.strftime('%H:%M:%S')}] Action Finished. Recognized: {' '.join(glosses)}")
+                    else:
+                        # Not recording, maintain a small buffer (5 frames) for the start of the next action
+                        # This prevents buffer from growing indefinitely when idle
+                        if len(adapter._frame_buffer) > 5:
+                            adapter._frame_buffer = adapter._frame_buffer[-5:]
+                            if hasattr(adapter, '_timestamps'):
+                                adapter._timestamps = adapter._timestamps[-5:]
 
             # UI Overlay
-            status_text = f"Recognized: {' '.join(last_pred)}" if last_pred else "Listening..."
+            if is_recording:
+                status_text = "Recording action..."
+            else:
+                status_text = f"Recognized: {' '.join(last_pred)}" if last_pred else "Listening..."
             cv2.putText(frame, status_text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
             cv2.imshow('WhisperSign Real-time (MediaPipe)', frame)
 

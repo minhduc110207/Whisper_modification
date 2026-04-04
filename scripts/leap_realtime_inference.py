@@ -142,46 +142,68 @@ def run_inference(args):
     print("\nStarting Real-time Inference. Press Ctrl+C to stop.")
     print("-" * 50)
     
-    buffer_frames = []
-    window_limit = int(args.window_duration * args.fps)
+    silence_counter = 0
+    silence_threshold = int(args.fps * 0.5)  # 0.5s silence triggers end of action
+    min_sequence_length = int(args.fps * 0.5) # Minimum 0.5s sequence
+    is_recording = False
+    last_pred = []
     
     try:
-        last_pred = []
-        
         for hands in source:
             # Add frame to adapter buffer
             adapter.add_frame(hands)
             
-            # Check if we have enough frames for a window
-            if len(adapter._frame_buffer) >= window_limit:
-                # Get sequence and compute velocities
-                keypoints = adapter.get_sequence(clear_buffer=False)
+            # Action-end based inference logic
+            if len(adapter._frame_buffer) >= 5:
+                # Check recent activity to see if moving
+                recent_frames = np.stack(adapter._frame_buffer[-5:])
+                # Check confidence and standard deviation of position for motion
+                avg_conf = np.mean(recent_frames[:, :, 6])
+                pos_std = np.mean(np.std(recent_frames[:, :, :3], axis=0))
                 
-                # Slicing the buffer to keep sliding (FIFO style)
-                # Keep the last overlap% for the next window
-                keep_size = int(window_limit * args.overlap)
-                adapter._frame_buffer = adapter._frame_buffer[-keep_size:]
+                is_visible = avg_conf >= 0.1
+                is_moving = pos_std >= args.motion_threshold
                 
-                # Normalize
-                keypoints = spatial_norm.normalize(keypoints)
-                keypoints = scale_norm.normalize(keypoints)
-                
-                # Infer using hybrid CTC-Attention decode
-                # Each window decoded independently (no cross-window context)
-                predictions = slider.model.decode(
-                    torch.from_numpy(keypoints).float().unsqueeze(0).to(device),
-                    torch.tensor([len(keypoints)], device=device),
-                    ctc_weight=ctc_weight,
-                    max_decode_length=max_decode_length,
-                )
-                
-                if predictions and predictions[0]:
-                    gloss_ids = predictions[0]
-                    glosses = [id_to_gloss.get(gid, f"?{gid}") for gid in gloss_ids]
-                    
-                    if glosses != last_pred:
-                        print(f"[{time.strftime('%H:%M:%S')}] Recognized: {' '.join(glosses)}")
-                        last_pred = glosses
+                if is_visible and is_moving:
+                    silence_counter = 0
+                    if not is_recording:
+                        is_recording = True
+                        last_pred = []
+                else:
+                    if is_recording:
+                        silence_counter += 1
+                        if silence_counter > silence_threshold:
+                            # Action is Complete: End of movement detected
+                            is_recording = False
+                            
+                            keypoints = adapter.get_sequence(clear_buffer=True)
+                            
+                            # Only predict if sequence is long enough to be an actual sign
+                            if len(keypoints) >= min_sequence_length:
+                                # Normalize
+                                keypoints = spatial_norm.normalize(keypoints)
+                                keypoints = scale_norm.normalize(keypoints)
+                                
+                                # Infer using hybrid CTC-Attention decode
+                                predictions = model.decode(
+                                    torch.from_numpy(keypoints).float().unsqueeze(0).to(device),
+                                    torch.tensor([len(keypoints)], device=device),
+                                    ctc_weight=ctc_weight,
+                                    max_decode_length=max_decode_length,
+                                )
+                                
+                                if predictions and predictions[0]:
+                                    gloss_ids = predictions[0]
+                                    glosses = [id_to_gloss.get(gid, f"?{gid}") for gid in gloss_ids]
+                                    glosses = [g for g in glosses if g != "<blank>"]
+                                    
+                                    if len(glosses) > 0:
+                                        print(f"[{time.strftime('%H:%M:%S')}] Action Finished. Recognized: {' '.join(glosses)}")
+                                        last_pred = glosses
+                    else:
+                        # Not recording, maintain a small buffer (5 frames) for start of next action
+                        if len(adapter._frame_buffer) > 5:
+                            adapter._frame_buffer = adapter._frame_buffer[-5:]
 
     except KeyboardInterrupt:
         print("\nStopping inference...")
@@ -203,6 +225,7 @@ if __name__ == "__main__":
     parser.add_argument("--ctc_weight", type=float, default=None, help="CTC weight for hybrid decode (0-1)")
     parser.add_argument("--no_context", action="store_true", default=True,
                         help="Decode each segment independently (default: True, prevents hallucination)")
+    parser.add_argument("--motion_threshold", type=float, default=0.005, help="Minimum motion variance to trigger inference")
     
     args = parser.parse_args()
     run_inference(args)
