@@ -311,7 +311,10 @@ class TwoPassDecoder(nn.Module):
                 continue
 
             # Score hypothesis with Attention decoder
-            hyp_tensor = torch.tensor([hyp], device=encoder_output.device)
+            # We must shift the input right (prepend SOS) to match training
+            # We use 0 (CTC blank) as the SOS token
+            hyp_input = [0] + hyp[:-1] if len(hyp) > 0 else [0]
+            hyp_tensor = torch.tensor([hyp_input], device=encoder_output.device)
             enc_out_b = encoder_output[b:b+1]
             enc_mask_b = encoder_mask[b:b+1] if encoder_mask is not None else None
 

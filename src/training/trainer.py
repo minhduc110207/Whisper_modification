@@ -43,6 +43,7 @@ class WhisperSignTrainer:
 
         self.writer = SummaryWriter(log_dir)
         self.global_step = 0
+        self.training_stats = {}
 
     def _create_optimizer(self, lr: float, weight_decay: float):
         """Create AdamW optimizer for trainable parameters only."""
@@ -73,22 +74,28 @@ class WhisperSignTrainer:
 
             # Forward pass
             # Stage 1: CTC-only (no attention decoder training)
-            # Stage 2/3: Pass target tokens for attention decoder teacher-forcing
             target_tokens = None
+            att_targets = None
             padded_labels = batch.get("padded_labels")
+            
             if stage >= 2 and padded_labels is not None:
-                target_tokens = padded_labels.to(self.device)
+                att_targets = padded_labels.to(self.device)
+                
+                # Create teacher-forcing input by shifting right: [SOS, L_1, ..., L_{T-1}]
+                # Using 0 (CTC blank) as the SOS token
+                B, T = att_targets.shape
+                sos_tokens = torch.zeros((B, 1), dtype=torch.long, device=self.device)
+                target_tokens = torch.cat([sos_tokens, att_targets[:, :-1]], dim=1)
+                
+                # Replace padding (-1) with 0 to prevent Embedding layer out-of-bounds error
+                target_tokens = target_tokens.masked_fill(target_tokens == -1, 0)
+                
             outputs = self.model(features, feature_lengths, target_tokens)
 
             # Get dynamic alpha if scheduler is provided
             current_alpha = alpha_scheduler.step() if alpha_scheduler is not None else None
 
             # Compute loss
-            # Use padded_labels for attention targets (B, T_dec) when available
-            att_targets = None
-            if outputs.get("att_logits") is not None and padded_labels is not None:
-                att_targets = padded_labels.to(self.device)
-
             loss_dict = loss_fn(
                 ctc_log_probs=outputs["ctc_log_probs"],
                 att_logits=outputs.get("att_logits"),
@@ -151,7 +158,20 @@ class WhisperSignTrainer:
             feature_lengths = batch["feature_lengths"].to(self.device)
             label_lengths = batch["label_lengths"].to(self.device)
 
-            outputs = self.model(features, feature_lengths)
+            target_tokens = None
+            att_targets = None
+            padded_labels = batch.get("padded_labels")
+            
+            if padded_labels is not None:
+                att_targets = padded_labels.to(self.device)
+                
+                # Shift right for teacher-forcing validation
+                B, T = att_targets.shape
+                sos_tokens = torch.zeros((B, 1), dtype=torch.long, device=self.device)
+                target_tokens = torch.cat([sos_tokens, att_targets[:, :-1]], dim=1)
+                target_tokens = target_tokens.masked_fill(target_tokens == -1, 0)
+
+            outputs = self.model(features, feature_lengths, target_tokens)
 
             loss_dict = loss_fn(
                 ctc_log_probs=outputs["ctc_log_probs"],
@@ -159,6 +179,7 @@ class WhisperSignTrainer:
                 labels=labels,
                 output_lengths=outputs["output_lengths"],
                 label_lengths=label_lengths,
+                att_targets=att_targets,
             )
 
             total_loss += loss_dict["total"].item()
@@ -203,6 +224,7 @@ class WhisperSignTrainer:
         )
         loss_fn = HybridCTCAttentionLoss(alpha=1.0, blank_id=0)  # CTC only
 
+        start_time = time.time()
         best_val_loss = float("inf")
         for epoch in range(1, epochs + 1):
             train_loss = self._train_one_epoch(
@@ -224,6 +246,14 @@ class WhisperSignTrainer:
             os.path.join(self.save_dir, "final_stage1.pt"),
             optimizer, epochs, train_loss,
         )
+        
+        elapsed = time.time() - start_time
+        self.training_stats["Stage 1: Warm-up"] = {
+            "Epochs": epochs,
+            "Final Train Loss": f"{train_loss:.4f}",
+            "Best Val Loss": f"{best_val_loss:.4f}" if val_loader is not None else "N/A",
+            "Time (min)": f"{elapsed / 60:.2f}"
+        }
 
     def train_stage2(
         self,
@@ -270,6 +300,7 @@ class WhisperSignTrainer:
         )
         print(f"  Dynamic Alpha: {alpha_start} -> {alpha_end} over {total_steps} steps")
 
+        start_time = time.time()
         best_val_loss = float("inf")
         for epoch in range(1, epochs + 1):
             train_loss = self._train_one_epoch(
@@ -299,6 +330,14 @@ class WhisperSignTrainer:
             os.path.join(self.save_dir, "final_stage2.pt"),
             optimizer, epochs, train_loss,
         )
+        
+        elapsed = time.time() - start_time
+        self.training_stats["Stage 2: Joint Mdl"] = {
+            "Epochs": epochs,
+            "Final Train Loss": f"{train_loss:.4f}",
+            "Best Val Loss": f"{best_val_loss:.4f}" if val_loader is not None else "N/A",
+            "Time (min)": f"{elapsed / 60:.2f}"
+        }
 
     def train_stage3(
         self,
@@ -328,6 +367,7 @@ class WhisperSignTrainer:
         )
         loss_fn = HybridCTCAttentionLoss(alpha=alpha, blank_id=0)
 
+        start_time = time.time()
         best_val_loss = float("inf")
         for epoch in range(1, epochs + 1):
             train_loss = self._train_one_epoch(
@@ -349,7 +389,39 @@ class WhisperSignTrainer:
             os.path.join(self.save_dir, "final_model.pt"),
             optimizer, epochs, train_loss,
         )
+        
+        elapsed = time.time() - start_time
+        self.training_stats["Stage 3: Real-time"] = {
+            "Epochs": epochs,
+            "Final Train Loss": f"{train_loss:.4f}",
+            "Best Val Loss": f"{best_val_loss:.4f}" if val_loader is not None else "N/A",
+            "Time (min)": f"{elapsed / 60:.2f}"
+        }
         print("Training complete!")
+
+    def _print_final_summary(self):
+        """Print a formatted statistical table of the training run."""
+        if not self.training_stats:
+            return
+            
+        print("\n" + "=" * 80)
+        print(f"{'TRAINING PROCESS SUMMARY':^80}")
+        print("=" * 80)
+        
+        col_names = ["Stage", "Epochs", "Final Train Loss", "Best Val Loss", "Time (min)"]
+        row_format = "{:<20} | {:>8} | {:>18} | {:>15} | {:>10}"
+        
+        print(row_format.format(*col_names))
+        print("-" * 80)
+        for stage_name, stats in self.training_stats.items():
+            print(row_format.format(
+                stage_name, 
+                stats.get("Epochs", "N/A"), 
+                stats.get("Final Train Loss", "N/A"), 
+                stats.get("Best Val Loss", "N/A"), 
+                stats.get("Time (min)", "N/A")
+            ))
+        print("=" * 80 + "\n")
 
     def train_all_stages(
         self,
@@ -360,3 +432,4 @@ class WhisperSignTrainer:
         self.train_stage1(train_loader, val_loader)
         self.train_stage2(train_loader, val_loader)
         self.train_stage3(train_loader, val_loader)
+        self._print_final_summary()
